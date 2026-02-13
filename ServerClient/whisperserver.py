@@ -10,12 +10,14 @@ import json
 
 from ollama_funcs import send_prompt_local
 
-from dia.model import Dia
+
+from tts import TTS
 
 
 HOST = "0.0.0.0"
 PORT = 5555
 
+#TODO: Research context window
 
 def recv_all(sock, n):
     data = b""
@@ -31,7 +33,7 @@ def recv_all(sock, n):
 
 
 model = WhisperModel("base", device="cuda", compute_type="float16")
-
+tts_model = TTS()
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.bind((HOST, PORT))
     s.listen(1)
@@ -80,26 +82,27 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
         transcript_bytes = ollama_resp.encode("utf-8")
 
-        tts_model = Dia.from_pretrained("nari-labs/Dia-1.6B-0626")
 
 
         # Send transcript back
         conn.sendall(struct.pack("!I", len(transcript_bytes)))
         conn.sendall(transcript_bytes)
 
+        tts_model.speak_string(transcript)
+
         print("Transcript sent")
 
 
-        text = f"[S1] Hello World"
+        # text = f"[S1] Hello World"
 
-        output = tts_model.generate(
-            text,
-            use_torch_compile=False,
-            verbose=True,
-            cfg_scale=3.0,
-            temperature=1.8,
-            top_p=0.90,
-            cfg_filter_top_k=50,
-        )
+        # output = tts_model.generate(
+        #     text,
+        #     use_torch_compile=False,
+        #     verbose=True,
+        #     cfg_scale=3.0,
+        #     temperature=1.8,
+        #     top_p=0.90,
+        #     cfg_filter_top_k=50,
+        # )
 
-        tts_model.save_audio("simple.mp3", output)
+        # tts_model.save_audio("simple.mp3", output)

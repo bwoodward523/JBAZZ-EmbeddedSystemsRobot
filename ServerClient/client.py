@@ -4,6 +4,23 @@ import struct
 HOST = "127.0.0.1"
 PORT = 5555
 
+
+
+def setup_microphone():
+    import RPi.GPIO as GPIO
+
+    MicPin = 3
+    RelayPin = 4
+
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
+
+    GPIO.setup(MicPin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    GPIO.setup(RelayPin, GPIO.OUT, initial=GPIO.LOW)
+
+    while True:
+        GPIO.output(LedPin, GPIO.input(MicPin))
+
 # Fake audio for now
 with open("test.mp3", "rb") as f:
     audio = f.read()

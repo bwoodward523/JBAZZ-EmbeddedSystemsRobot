@@ -1,6 +1,8 @@
 import requests
 import json
 
+
+#TODO: Research context window
 def send_prompt_local(prompt_text, model_name="llama3"):
     url = "http://localhost:11434/api/chat" # Default local endpoint
     messages = [
