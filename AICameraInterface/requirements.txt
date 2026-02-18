@@ -1,0 +1,4 @@
+# AICameraInterface - Raspberry Pi AI camera (on-camera inference only)
+# Install on the Pi first: sudo apt install -y python3-picamera2 imx500-models
+numpy>=1.19.0
+opencv-python-headless>=4.5.0
