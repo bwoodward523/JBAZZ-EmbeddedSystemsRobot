@@ -6,7 +6,9 @@ import adafruit_blinka_raspberry_pi5_piomatter as piomatter
 
 width = 32
 height = 32
-gif_file = "mygif.gif"
+gif_file = "assets/b2.gif"
+# gif_file = "assets/Eye.png"
+# gif_file = "assets/rainbow.gif"
 
 geometry = piomatter.Geometry(
     width=width,
@@ -27,7 +29,7 @@ matrix = piomatter.PioMatter(
 
 with Image.open(gif_file) as img:
     print(f"frames: {img.n_frames}")
-
+    
     while True:
         for i in range(img.n_frames):
             img.seek(i)

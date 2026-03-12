@@ -6,7 +6,7 @@ import adafruit_blinka_raspberry_pi5_piomatter as piomatter
 
 width = 32
 height = 32
-gif_file = "mygif.gif"
+emotions = ["happy.png","surprise.png","fear.png","disgust.png","sad.png","anger.png"]
 
 geometry = piomatter.Geometry(
     width=width,
@@ -25,21 +25,12 @@ matrix = piomatter.PioMatter(
     geometry=geometry
 )
 
-with Image.open(gif_file) as img:
-    print(f"frames: {img.n_frames}")
+# with Image.open(gif_file) as img:
 
-    while True:
-        for i in range(img.n_frames):
-            img.seek(i)
+while True:
+    for i in range(len(emotions)):
+        img = np.asarray(Image.open(f"assets/base_emotions/{emotions[i]}").convert("RGB"))
+        framebuffer[:] = img[:, :, ::-1]
 
-            # Convert frame → RGB (critical for GIFs)
-            frame = img.convert("RGB")
-
-            # Scale to matrix resolution
-            frame = frame.resize((width, height), Image.NEAREST)
-
-            # Copy into framebuffer
-            framebuffer[:] = np.asarray(frame, dtype=np.uint8)
-
-            matrix.show()
-            time.sleep(0.1)
+        matrix.show()
+        time.sleep(1)
