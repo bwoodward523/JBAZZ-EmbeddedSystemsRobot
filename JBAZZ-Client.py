@@ -3,7 +3,7 @@ import struct
 import time
 from tts import TTS
 
-HOST = "127.0.0.1"
+HOST = "10.127.70.21"
 PORT = 5555
 
 def recv_exact(sock, n):
@@ -97,9 +97,14 @@ def run_client():
                         else:
                             tts_model.stream.feed("error getting returned text from model")
                             tts_model.stream.play()
+                    else:
+                        print("No TTS")
                 else:
-                    tts_model.stream.feed("list is not of size 3")
-                    tts_model.stream.play()
+                    if tts_model:
+                        tts_model.stream.feed("list is not of size 3")
+                        tts_model.stream.play()
+                    else: 
+                        print("List is not of size 3")
                 counter += 1
                 time.sleep(1)
         except KeyboardInterrupt:

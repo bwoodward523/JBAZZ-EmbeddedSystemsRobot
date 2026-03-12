@@ -3,7 +3,7 @@ from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, Elevenlabs
 # print("hello")
 class TTS:
     def __init__(self):
-        self.engine = SystemEngine() # replace with your TTS engine
+        self.engine = SystemEngine() 
         self.stream = TextToAudioStream(self.engine)
         # self.stream.feed("Hello world! How are you today?")
         self.stream.play_async()
