@@ -31,7 +31,7 @@ def recv_message(sock):
     return recv_exact(sock, length)
 
 
-def run_client():
+def run_client_thread():
     #Temporary microphhone creation in the TCP client. 
     #TODO: Move mic to JBAZZ once the file is ready to handle the TCP connection
     from threads.mic import Microphone

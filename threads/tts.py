@@ -13,6 +13,13 @@ class TTS:
         self.stream.feed(input_text)
         self.stream.play_async()
 
+def tts_thread():
+    tts = TTS()
+    while True:
+        print("Type text you'd like to hear, press [Enter] to submit: ")
+        text = input()
+        tts.stream.feed("Hi")
+        tts.stream.play_async()
 if __name__ == "__main__":
     tts = TTS()
     while True:
