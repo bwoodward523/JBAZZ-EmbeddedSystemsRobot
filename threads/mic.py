@@ -5,6 +5,7 @@ import webrtcvad
 
 class Microphone:
     def __init__(self, idle_window=2, fs=48000, frame_ms=20):
+        print("hii")
         self.fs = fs
         self.frame_ms = frame_ms
         self.channels = 1
@@ -13,6 +14,7 @@ class Microphone:
         self.samples_per_frame = int(self.fs * self.frame_ms / 1000)
         self.chunk = self.samples_per_frame  # CRITICAL
         
+        print("Hi")
         #From 0 to 3 controls the intensity it listens for speech. 3 means it is the strictest when looking for words. 
         self.vad = webrtcvad.Vad(3)
         self.p = pyaudio.PyAudio()
@@ -31,7 +33,7 @@ class Microphone:
         # Here our mic is index 1
         
 
-
+        print("??")
         self.valid_audio = False
 
 
@@ -44,7 +46,7 @@ class Microphone:
             channels=self.channels,
             rate=self.fs,
             frames_per_buffer=self.chunk,
-            input_device_index = 0,
+            input_device_index = 1,
             input=True
         )
 
@@ -73,7 +75,7 @@ class Microphone:
         return audio_bytes
 
     def save_as_wav(self, audio_bytes):
-        wf = wave.open("output.wav", 'wb')
+        wf = wave.open("./output.wav", 'wb')
         wf.setnchannels(self.channels)
         wf.setsampwidth(self.p.get_sample_size(self.sample_format))
         wf.setframerate(self.fs)
