@@ -2,10 +2,11 @@ import time
 import pyaudio
 import wave
 import webrtcvad
-
+from data_queues import audio_queue
+from events import post_event, EventType
 class Microphone:
     def __init__(self, idle_window=2, fs=48000, frame_ms=20):
-        print("hii")
+        start_time = time.time()
         self.fs = fs
         self.frame_ms = frame_ms
         self.channels = 1
@@ -14,7 +15,7 @@ class Microphone:
         self.samples_per_frame = int(self.fs * self.frame_ms / 1000)
         self.chunk = self.samples_per_frame  # CRITICAL
         
-        print("Hi")
+        # print("Hi")
         #From 0 to 3 controls the intensity it listens for speech. 3 means it is the strictest when looking for words. 
         self.vad = webrtcvad.Vad(3)
         self.p = pyaudio.PyAudio()
@@ -33,11 +34,11 @@ class Microphone:
         # Here our mic is index 1
         
 
-        print("??")
+        # print(f"elapsed initialize time: {time.time()-start_time}")
         self.valid_audio = False
 
 
-    def record(self):
+    def record_mic_thread(self):
         print("Beginning recording")
 
         #Valid audio means if speech was detected. If Audio is invalid, then it won't have speech and it wont be sent to the TCP server. 
@@ -71,10 +72,8 @@ class Microphone:
         stream.close()
 
         audio_bytes = b''.join(frames)
-        self.save_as_wav(audio_bytes)
-        return audio_bytes
-
-    def save_as_wav(self, audio_bytes):
+        
+        #Save as WAV
         wf = wave.open("./output.wav", 'wb')
         wf.setnchannels(self.channels)
         wf.setsampwidth(self.p.get_sample_size(self.sample_format))
@@ -82,18 +81,18 @@ class Microphone:
         wf.writeframes(audio_bytes)
         wf.close()
 
-    def disconnect(self):
+
+        #Grab the data from the output file 
+        with open("./output.wav", "rb") as f:
+            audio = f.read()
+        #Add the audio data to the audio queue 
+        audio_queue.put(audio)
+
+        #Flag event for completed listening
+        post_event(EventType.FINISHED_LISTENING, source="Mic")
+
         self.p.terminate()
 
 
-if __name__ == "__main__":
-    p = pyaudio.PyAudio()
-
-    for i in range(p.get_device_count()):
-        dev = p.get_device_info_by_index(i)
-        print(i, dev['name'], dev['maxInputChannels'])
-    
-    mic = Microphone()
-    data = mic.record()
-    print(data)
-    mic.disconnect()
+    def disconnect(self):
+        self.p.terminate()

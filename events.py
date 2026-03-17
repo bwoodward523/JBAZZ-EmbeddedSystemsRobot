@@ -13,15 +13,9 @@ class EventType(Enum):
     SERVER_ERROR = auto()
     FINISHED_SPEAKING = auto()
     FINISHED_SHOOTING = auto()
+    SEND_TO_SLEEP = auto()
 
-# EVENT_TO_TRIGGER = {
 
-#     EventType.WAKE_WORD_DETECTED: "wake",
-#     events.EventType.AUDIO_READY: "audio_ready",
-#     events.EventType.AUDIO_SENT: "audio_sent",
-#     events.EventType.RESPONSE_RECEIVED: "response_received",
-#     events.EventType.SHOOT_COMPLETE: "shoot_done"
-# }
 # Event container
 @dataclass
 class Event:

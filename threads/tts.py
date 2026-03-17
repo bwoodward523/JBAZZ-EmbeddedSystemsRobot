@@ -23,7 +23,12 @@ def tts_thread():
             text = text_queue.get()
             if isinstance(text,str):
                 tts.stream.feed(text)
-                tts.stream.play()
+                tts.stream.play_async()
 
 if __name__ == "__main__":
-    tts_thread()
+    tts = TTS()
+    while True:
+        text = input()
+        if isinstance(text,str):
+            tts.stream.feed(text)
+            tts.stream.play_async()

@@ -26,11 +26,11 @@ matrix = piomatter.PioMatter(
 )
 
 # with Image.open(gif_file) as img:
+def show_emotions_thread():
+    while True:
+        for i in range(len(emotions)):
+            img = np.asarray(Image.open(f"led_display/assets/base_emotions/{emotions[i]}").convert("RGB"))
+            framebuffer[:] = img[:, :, ::-1]
 
-while True:
-    for i in range(len(emotions)):
-        img = np.asarray(Image.open(f"assets/base_emotions/{emotions[i]}").convert("RGB"))
-        framebuffer[:] = img[:, :, ::-1]
-
-        matrix.show()
-        time.sleep(1)
+            matrix.show()
+            time.sleep(1)
