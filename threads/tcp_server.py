@@ -2,6 +2,7 @@ import socket
 import struct
 import time
 from .tts import TTS
+from data_queues import display_queue
 
 HOST = "10.127.70.21"
 PORT = 5555
@@ -44,13 +45,6 @@ def run_client_thread():
 
         try:
             while True:
-                
-                if tts_model:
-                    while tts_model.stream.is_playing():
-                        time.sleep(0.1)
-                        print("The stream is playing")
-                # msg = f"Message {counter}"
-
                 #The mic recording will create an output.wav file when its complete.
                 #The mic will continue trying to record if no speech is detected inside of the audio.
                 #This is essentially a listen loop
@@ -78,39 +72,41 @@ def run_client_thread():
                 response = response.split('!@#$')
                 print
                 #Ensure we have three items in our returned message from the server before we try and operate 
-                if len(response) == 3:
+                if len(response) == 4:
                     print(response[1])
-                    if response[0]:
-                        print(f"Emotion: {response[0]}")
+                    if response[1]:
+                        emotion = response[1].split(":")
+                        print(f"HERE IS THE EMOTION {emotion[1]}")
+                        display_queue.put(emotion[1])
                     else:
                         print("LLM failed to return an emotion")
+                       
 
-                    if response[1] == None:
+                    if response[2] == None:
                         print("Model failed to return a text response")
 
-                    if response[2]:
-                        print(f"Shoot: {response[2]}")
+                    if response[3]:
+                        print(f"Shoot: {response[3]}")
                     else:
                         print("LLM failed to return an emotion")
 
                     if tts_model:
                         #Try to grab text from model
-                        words = response[1].split(":")
+                        words = response[2].split(":")
                         if words:
                             print("PIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\n")
-                            tts_model.stream.stop()
                             tts_model.stream.feed(words[1])
                             tts_model.stream.play()
-                            
+                        
                         else:
                             tts_model.stream.feed("error getting returned text from model")
-                            # tts_model.stream.play_async()
+                            tts_model.stream.play()
                     else:
                         print("No TTS")
                 else:
                     if tts_model:
                         tts_model.stream.feed("list is not of size 3")
-                        # tts_model.stream.play()
+                        tts_model.stream.play()
                     else: 
                         print("List is not of size 3")
                 counter += 1
@@ -126,4 +122,4 @@ def run_client_thread():
 tts_model = TTS()
 
 if __name__ == "__main__":
-    run_client()
+    run_client_thread()

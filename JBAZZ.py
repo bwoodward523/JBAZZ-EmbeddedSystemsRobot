@@ -50,15 +50,9 @@ if __name__ == "__main__":
     print("hello")
     threading.Thread(target=run_client_thread, daemon=True).start() #args=[jbazz.mic, jbazz.tts]).start()
 
-    #Yeeeeah... I see this. I know. It prevents a race condition with audio libraries. The TCP client starts the microphone and then the TTS gets the speaker ready. They fight. 
-    #SOOOOO Sleep!
-    time.sleep(1)
-    #Boot thread for Text to speech
-    # threading.Thread(target=tts_thread, daemon=True).start()
-
     #TODO: Look for connected display
     #Start display thread if available.
-    # threading.Thread(target=show_emotions_thread, daemon=True).start()
+    threading.Thread(target=show_emotions_thread, daemon=True).start()
 
 
     while True:
