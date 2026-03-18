@@ -9,7 +9,7 @@ from events import *
 from threads.tcp_server import run_client_thread
 from threads.mic import Microphone
 from threads.tts import TTS
-from led_display.show_emotions import show_emotions_thread
+# from led_display.show_emotions import show_emotions_thread
 from thread_controls import listen_event
 
 
@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     #Establish the conenction to the server ASAP
     print("hello")
-    threading.Thread(target=run_client_thread, daemon=True).start() #args=[jbazz.mic, jbazz.tts]).start()
+    # threading.Thread(target=run_client_thread, daemon=True).start() #args=[jbazz.mic, jbazz.tts]).start()
 
     #Yeeeeah... I see this. I know. It prevents a race condition with audio libraries. The TCP client starts the microphone and then the TTS gets the speaker ready. They fight. 
     #SOOOOO Sleep!
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     #Start display thread if available.
     # threading.Thread(target=show_emotions_thread, daemon=True).start()
 
-
+    run_client_thread()
     while True:
         if not event_queue.empty():
             event = event_queue.get()

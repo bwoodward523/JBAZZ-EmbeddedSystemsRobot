@@ -2,11 +2,9 @@ import time
 import pyaudio
 import wave
 import webrtcvad
-from data_queues import audio_queue
-from events import post_event, EventType
+
 class Microphone:
-    def __init__(self, idle_window=2, fs=48000, frame_ms=20):
-        start_time = time.time()
+    def __init__(self, idle_window=2, fs=16000, frame_ms=20):
         self.fs = fs
         self.frame_ms = frame_ms
         self.channels = 1
@@ -15,26 +13,10 @@ class Microphone:
         self.samples_per_frame = int(self.fs * self.frame_ms / 1000)
         self.chunk = self.samples_per_frame  # CRITICAL
         
-        # print("Hi")
         #From 0 to 3 controls the intensity it listens for speech. 3 means it is the strictest when looking for words. 
         self.vad = webrtcvad.Vad(3)
         self.p = pyaudio.PyAudio()
 
-        #Keep this snippet. Run this to find the p.open param input_device_index. 
-      
-        #We want our USB PnP Sound Device or USB MIC!
-
-        # for i in range(self.p.get_device_count()):
-        #     dev = self.p.get_device_info_by_index(i)
-        #     print(i, dev['name'], dev['maxInputChannels'])
-
-        # Example output of code snippet.
-        # 0 snd_rpi_googlevoicehat_soundcar: Google voiceHAT SoundCard HiFi voicehat-hifi-0 (hw:2,0) 2
-        # 1 USB PnP Sound Device: Audio (hw:3,0) 1
-        # Here our mic is index 1
-        
-
-        # print(f"elapsed initialize time: {time.time()-start_time}")
         self.valid_audio = False
 
 
@@ -47,7 +29,6 @@ class Microphone:
             channels=self.channels,
             rate=self.fs,
             frames_per_buffer=self.chunk,
-            input_device_index = 1,
             input=True
         )
 
@@ -62,8 +43,7 @@ class Microphone:
                 self.valid_audio = True
                 last_voice_time = time.time()
                 print("speech detected")
-            else:
-                print("no speech detected")
+
             if time.time() - last_voice_time > 2:
                 break
 
@@ -73,28 +53,22 @@ class Microphone:
         stream.close()
 
         audio_bytes = b''.join(frames)
-        
-        #Save as WAV
-        wf = wave.open("./output.wav", 'wb')
+        self.save_as_wav(audio_bytes)
+        return audio_bytes
+
+    def save_as_wav(self, audio_bytes):
+        wf = wave.open("output.wav", 'wb')
         wf.setnchannels(self.channels)
         wf.setsampwidth(self.p.get_sample_size(self.sample_format))
         wf.setframerate(self.fs)
         wf.writeframes(audio_bytes)
         wf.close()
 
-
-        #Grab the data from the output file 
-        # with open("./output.wav", "rb") as f:
-        #     audio = f.read()
-        # #Add the audio data to the audio queue 
-        # audio_queue.put(audio)
-
-        #Flag event for completed listening
-        #Moved to the tcp server for now.
-        # post_event(EventType.FINISHED_LISTENING, source="Mic")
-
-        self.p.terminate()
-
-
     def disconnect(self):
         self.p.terminate()
+
+
+if __name__ == "__main__":
+    mic = Microphone()
+    data = mic.record()
+    mic.disconnect()
