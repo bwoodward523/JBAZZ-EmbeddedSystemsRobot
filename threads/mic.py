@@ -38,7 +38,7 @@ class Microphone:
         self.valid_audio = False
 
 
-    def record_mic_thread(self):
+    def record(self):
         print("Beginning recording")
 
         #Valid audio means if speech was detected. If Audio is invalid, then it won't have speech and it wont be sent to the TCP server. 
@@ -62,7 +62,8 @@ class Microphone:
                 self.valid_audio = True
                 last_voice_time = time.time()
                 print("speech detected")
-
+            else:
+                print("no speech detected")
             if time.time() - last_voice_time > 2:
                 break
 
@@ -83,13 +84,14 @@ class Microphone:
 
 
         #Grab the data from the output file 
-        with open("./output.wav", "rb") as f:
-            audio = f.read()
-        #Add the audio data to the audio queue 
-        audio_queue.put(audio)
+        # with open("./output.wav", "rb") as f:
+        #     audio = f.read()
+        # #Add the audio data to the audio queue 
+        # audio_queue.put(audio)
 
         #Flag event for completed listening
-        post_event(EventType.FINISHED_LISTENING, source="Mic")
+        #Moved to the tcp server for now.
+        # post_event(EventType.FINISHED_LISTENING, source="Mic")
 
         self.p.terminate()
 

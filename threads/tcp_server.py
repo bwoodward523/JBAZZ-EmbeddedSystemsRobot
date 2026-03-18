@@ -1,9 +1,7 @@
 import socket
 import struct
 import time
-from .tts import text_queue
-from .mic import Microphone
-
+from .tts import TTS
 
 HOST = "10.127.70.21"
 PORT = 5555
@@ -34,13 +32,10 @@ def recv_message(sock):
 
 
 def run_client_thread():
-    print("Starting microphone")
-    mic = Microphone()
-    print("I am running")
     #Temporary microphhone creation in the TCP client. 
     #TODO: Move mic to JBAZZ once the file is ready to handle the TCP connection
-    print("hello")
-    print("socket?")
+    from .mic import Microphone
+    mic = Microphone()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
         print("Connected.")
@@ -49,6 +44,11 @@ def run_client_thread():
 
         try:
             while True:
+                
+                if tts_model:
+                    while tts_model.stream.is_playing():
+                        time.sleep(0.1)
+                        print("The stream is playing")
                 # msg = f"Message {counter}"
 
                 #The mic recording will create an output.wav file when its complete.
@@ -60,7 +60,7 @@ def run_client_thread():
                 mic.valid_audio = False
 
                 #Grab the data from the output file
-                with open("./output.wav", "rb") as f:
+                with open("output.wav", "rb") as f:
                     audio = f.read()
 
                 #Send the data to the TCP server.
@@ -76,6 +76,7 @@ def run_client_thread():
                 
                 #Parse server output. LLM is told to delimit by !@#$ because it needs to be something the AI would not generate in conversation
                 response = response.split('!@#$')
+                print
                 #Ensure we have three items in our returned message from the server before we try and operate 
                 if len(response) == 3:
                     print(response[1])
@@ -92,29 +93,37 @@ def run_client_thread():
                     else:
                         print("LLM failed to return an emotion")
 
-                    if text_queue is not None:
+                    if tts_model:
                         #Try to grab text from model
                         words = response[1].split(":")
                         if words:
-                            text_queue.put(words[1])
+                            print("PIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\n")
+                            tts_model.stream.stop()
+                            tts_model.stream.feed(words[1])
+                            tts_model.stream.play()
+                            
                         else:
-                            text_queue.put("error getting returned text from model")
+                            tts_model.stream.feed("error getting returned text from model")
+                            # tts_model.stream.play_async()
                     else:
                         print("No TTS")
                 else:
-                    if text_queue is not None:
-                        text_queue.put("list is not of size 3")
+                    if tts_model:
+                        tts_model.stream.feed("list is not of size 3")
+                        # tts_model.stream.play()
                     else: 
                         print("List is not of size 3")
                 counter += 1
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
-        except Exception as e:
-            print(f"Error with the server thread {e}")
+
         finally:
             print("Closing connection.")
             mic.disconnect()
 
+
+tts_model = TTS()
+
 if __name__ == "__main__":
-    run_client_thread()
+    run_client()

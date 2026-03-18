@@ -8,7 +8,7 @@ from transitions import Machine
 from events import * 
 from threads.tcp_server import run_client_thread
 from threads.mic import Microphone
-from threads.tts import tts_thread
+from threads.tts import TTS
 from led_display.show_emotions import show_emotions_thread
 from thread_controls import listen_event
 
@@ -16,15 +16,16 @@ from thread_controls import listen_event
 EVENT_TO_TRIGGER = {
 
     EventType.WAKE_UP_DETECTED: 'listen',
-    EventType.SEND_TO_SLEEP: 'sleep'
+    EventType.SEND_TO_SLEEP: 'sleep',
+    EventType.FINISHED_LISTENING: 'sleep'
 }
 
 class JBAZZ:
     states = ['sleeping', 'listening', 'processing', 'speaking']
 
     def __init__(self):
-        self.mic = Microphone()
-
+        # self.mic = Microphone()
+        # self.tts = TTS()
         self.machine = Machine(model=self, states=JBAZZ.states, initial='sleeping')
 
         #Here we handle defining which transitions are valid. 
@@ -32,9 +33,11 @@ class JBAZZ:
         self.machine.add_transition('sleep', 'listening', 'sleeping')
 
     def on_enter_listening(self):
-        threading.Thread(target=self.mic.record_mic_thread, daemon=True).start()
+        # threading.Thread(target=self.mic.record_mic_thread, daemon=True).start()
+        pass
     def on_exit_listening(self):
         print("finsihed listening")
+        # dipslay_queue('thinking face')
 
 jbazz = JBAZZ()
  
@@ -45,13 +48,13 @@ if __name__ == "__main__":
 
     #Establish the conenction to the server ASAP
     print("hello")
-    threading.Thread(target=run_client_thread, daemon=True).start()
+    threading.Thread(target=run_client_thread, daemon=True).start() #args=[jbazz.mic, jbazz.tts]).start()
 
     #Yeeeeah... I see this. I know. It prevents a race condition with audio libraries. The TCP client starts the microphone and then the TTS gets the speaker ready. They fight. 
     #SOOOOO Sleep!
     time.sleep(1)
     #Boot thread for Text to speech
-    threading.Thread(target=tts_thread, daemon=True).start()
+    # threading.Thread(target=tts_thread, daemon=True).start()
 
     #TODO: Look for connected display
     #Start display thread if available.

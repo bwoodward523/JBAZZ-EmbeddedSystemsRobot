@@ -1,5 +1,6 @@
 from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, ElevenlabsEngine
 from queue import Queue
+
 # print("hello")
 class TTS:
     def __init__(self):
@@ -10,7 +11,11 @@ class TTS:
     #Function that takes an input string in and speaks the text instantly 
     def speak_string(self, input_text):
         self.stream.feed(input_text)
-        self.stream.play_async()
+        # import time
+        # time.sleep(.5)
+        self.stream.play()
+
+    
         
 #public queue for others to push to. 
 text_queue = Queue()
