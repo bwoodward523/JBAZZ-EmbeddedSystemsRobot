@@ -35,11 +35,19 @@ def show_emotions_thread():
     time.sleep(1)
     while True:
         emotion = display_queue.get()
-        print(f"{emotion} hahahahahahahaha")
-        img = np.asarray(Image.open(f"led_display/assets/base_emotions/{emotion}.png").convert("RGB"))
-        framebuffer[:] = img[:, :, :]
+        # print(f"{emotion} hahahahahahahaha")
 
-        matrix.show()
+        #Implement a function to try its best to turn non deterministic result into safe one from emotion. ie getting "anger" instead of anger. 
+        #Temp half-fix
+        emotion = emotion.replace('"', "")
+        emotion = emotion.replace(" ", "")
+        try:
+            img = np.asarray(Image.open(f"led_display/assets/base_emotions/{emotion}.png").convert("RGB"))
+            framebuffer[:] = img[:, :, :]
+
+            matrix.show()
+        except Exception as e:
+            print(f"Failed to set display Error: {e}")
         time.sleep(1)
         # print("?")
         # for i in range(len(emotions)):

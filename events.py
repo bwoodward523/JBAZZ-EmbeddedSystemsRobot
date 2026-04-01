@@ -15,15 +15,12 @@ class EventType(Enum):
     FINISHED_SHOOTING = auto()
     SEND_TO_SLEEP = auto()
 
-
 # Event container
 @dataclass
 class Event:
     type: EventType
     data: dict | None = None
     source: str | None = None
-
-
 
 event_queue = Queue()
 

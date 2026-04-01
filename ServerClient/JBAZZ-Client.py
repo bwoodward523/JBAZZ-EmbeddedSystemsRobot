@@ -3,7 +3,7 @@ import struct
 import time
 from threads.tts import TTS
 
-HOST = "10.127.70.21"
+HOST = "10.127.24.41"
 PORT = 5555
 
 def recv_exact(sock, n):

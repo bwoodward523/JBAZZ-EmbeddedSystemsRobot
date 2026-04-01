@@ -7,6 +7,7 @@ import time
 from transitions import Machine
 from events import * 
 from threads.tcp_server import run_client_thread
+from threads.tcp_server_sim import sim_run_client_thread
 from threads.mic import Microphone
 from threads.tts import TTS
 from led_display.show_emotions import show_emotions_thread
@@ -14,7 +15,6 @@ from thread_controls import listen_event
 
 
 EVENT_TO_TRIGGER = {
-
     EventType.WAKE_UP_DETECTED: 'listen',
     EventType.SEND_TO_SLEEP: 'sleep',
     EventType.FINISHED_LISTENING: 'sleep'
@@ -48,7 +48,11 @@ if __name__ == "__main__":
 
     #Establish the conenction to the server ASAP
     print("hello")
-    threading.Thread(target=run_client_thread, daemon=True).start() #args=[jbazz.mic, jbazz.tts]).start()
+    sim_tcp = True
+    if not sim_tcp:
+        threading.Thread(target=run_client_thread, daemon=True).start() 
+    else:
+        threading.Thread(target=sim_run_client_thread, daemon=True).start() 
 
     #TODO: Look for connected display
     #Start display thread if available.

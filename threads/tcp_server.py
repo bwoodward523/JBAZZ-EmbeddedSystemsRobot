@@ -44,7 +44,11 @@ def run_client_thread():
         counter = 0
 
         try:
+          
             while True:
+                while tts_model.stream.is_playing():
+                    print(f"Saving the world ")
+                    time.sleep(0.1)
                 #The mic recording will create an output.wav file when its complete.
                 #The mic will continue trying to record if no speech is detected inside of the audio.
                 #This is essentially a listen loop
@@ -70,8 +74,8 @@ def run_client_thread():
                 
                 #Parse server output. LLM is told to delimit by !@#$ because it needs to be something the AI would not generate in conversation
                 response = response.split('!@#$')
-                print
                 #Ensure we have three items in our returned message from the server before we try and operate 
+                print(f"size of list {len(response)} | response list = {response}")
                 if len(response) == 4:
                     print(response[1])
                     if response[1]:
@@ -94,23 +98,24 @@ def run_client_thread():
                         #Try to grab text from model
                         words = response[2].split(":")
                         if words:
-                            print("PIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\nPIHGAOGAWO*YWFOHY:ISEILUGEFIYTWEFIUAEFEFGIRGEGWOHIOEGWIHIHO:EGUHEG\n")
+                            print(f"Words {words}")
                             tts_model.stream.feed(words[1])
-                            tts_model.stream.play()
+                            tts_model.stream.play(log_synthesized_text=True)
                         
                         else:
+                            print(f"Error getting text from model")
                             tts_model.stream.feed("error getting returned text from model")
-                            tts_model.stream.play()
+                            tts_model.stream.play(log_synthesized_text=True)
                     else:
                         print("No TTS")
                 else:
                     if tts_model:
-                        tts_model.stream.feed("list is not of size 3")
+                        print("List Was not of expected")
+                        tts_model.stream.feed("list is not of size 4")
                         tts_model.stream.play()
                     else: 
-                        print("List is not of size 3")
+                        print("List is not of size 4")
                 counter += 1
-                time.sleep(1)
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
 
