@@ -4,8 +4,9 @@ from queue import Queue
 # print("hello")
 class TTS:
     def __init__(self):
-        self.engine = SystemEngine() 
+        self.engine = SystemEngine(voice="en-us-nyc",print_installed_voices=True) 
         self.stream = TextToAudioStream(self.engine)
+        # print(f"voices: {self.engine.get_voices()}")
         # self.stream.feed("Hello world! How are you today?")
 
     #Function that takes an input string in and speaks the text instantly 

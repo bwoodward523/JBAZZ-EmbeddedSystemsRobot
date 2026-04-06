@@ -72,8 +72,8 @@ def run_client_thread():
                 response = payload.decode("utf-8")
                 print("Server:", response)
                 
-                #Parse server output. LLM is told to delimit by !@#$ because it needs to be something the AI would not generate in conversation
-                response = response.split('!@#$')
+                #Parse server output. LLM is told to delimit by @#$ because it needs to be something the AI would not generate in conversation
+                response = response.split('@#$')
                 #Ensure we have three items in our returned message from the server before we try and operate 
                 print(f"size of list {len(response)} | response list = {response}")
                 if len(response) == 4:
