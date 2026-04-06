@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     #Establish the conenction to the server ASAP
     print("hello")
-    sim_tcp = True
+    sim_tcp = False
     if not sim_tcp:
         threading.Thread(target=run_client_thread, daemon=True).start() 
     else:
