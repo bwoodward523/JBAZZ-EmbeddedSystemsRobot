@@ -1,9 +1,9 @@
 import socket
 import struct
 import time
-from tts import TTS
+from threads.tts import TTS
 
-HOST = "127.0.0.1"
+HOST = "10.127.24.41"
 PORT = 5555
 
 def recv_exact(sock, n):
@@ -34,7 +34,7 @@ def recv_message(sock):
 def run_client():
     #Temporary microphhone creation in the TCP client. 
     #TODO: Move mic to JBAZZ once the file is ready to handle the TCP connection
-    from mic import Microphone
+    from threads.mic import Microphone
     mic = Microphone()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
@@ -97,9 +97,14 @@ def run_client():
                         else:
                             tts_model.stream.feed("error getting returned text from model")
                             tts_model.stream.play()
+                    else:
+                        print("No TTS")
                 else:
-                    tts_model.stream.feed("list is not of size 3")
-                    tts_model.stream.play()
+                    if tts_model:
+                        tts_model.stream.feed("list is not of size 3")
+                        tts_model.stream.play()
+                    else: 
+                        print("List is not of size 3")
                 counter += 1
                 time.sleep(1)
         except KeyboardInterrupt:

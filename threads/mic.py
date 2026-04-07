@@ -4,7 +4,7 @@ import wave
 import webrtcvad
 
 class Microphone:
-    def __init__(self, idle_window=2, fs=16000, frame_ms=20):
+    def __init__(self, idle_window=2, fs=48000, frame_ms=20):
         self.fs = fs
         self.frame_ms = frame_ms
         self.channels = 1
@@ -29,25 +29,29 @@ class Microphone:
             channels=self.channels,
             rate=self.fs,
             frames_per_buffer=self.chunk,
+            input_device_index=1,
             input=True
         )
 
         frames = []
         last_voice_time = time.time()
+        try:
+            while True:
+                frame = stream.read(self.chunk, exception_on_overflow=False)
+                frames.append(frame)
 
-        while True:
-            frame = stream.read(self.chunk, exception_on_overflow=False)
-            frames.append(frame)
+                if self.vad.is_speech(frame, self.fs):
+                    self.valid_audio = True
+                    last_voice_time = time.time()
+                    print("speech detected")
 
-            if self.vad.is_speech(frame, self.fs):
-                self.valid_audio = True
-                last_voice_time = time.time()
-                print("speech detected")
-
-            if time.time() - last_voice_time > 2:
-                break
-
-        print("Finished recording")
+                if time.time() - last_voice_time > 2:
+                    break
+                else:
+                    print(f"no detected {time.time() - last_voice_time}")
+        except Exception as e:
+            print(f"Recording error: {e}")
+        
 
         stream.stop_stream()
         stream.close()
