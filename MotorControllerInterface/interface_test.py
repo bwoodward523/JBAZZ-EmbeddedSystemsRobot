@@ -1,137 +1,220 @@
+#!/usr/bin/env python3
 """
-Interface test – AI Camera + Motor Controller.
+Interface test – AI Camera person tracking + Motor Controller servo output.
 
-Uses the AI Camera to detect a person and prints the servo commands
-that the MotorController *would* send to keep the person centered
-in the frame.  No STM32 connection required; this is a dry-run that
-logs everything to the console.
+Based on tracker_app.py (which displays correctly), with motor controller
+pan/tilt logic layered on top.
 
-Run from the project root:
-    python -m MotorControllerInterface.interface_test
-  or:
-    cd MotorControllerInterface && python interface_test.py
+Run from AICameraInterface (same as tracker_app.py):
+    cd AICameraInterface && python ../MotorControllerInterface/interface_test.py
+
+Or from project root:
+    PYTHONPATH=AICameraInterface python MotorControllerInterface/interface_test.py
 """
 
 from __future__ import annotations
 
-import sys
+import argparse
 import os
-import time
+import signal
+import sys
+from typing import Tuple
 
-# Allow imports from sibling packages when run directly
+import cv2
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "AICameraInterface"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from AICameraInterface.ai_camera import (
+from ai_camera import (
     AICameraFeed,
-    ai_camera_available,
-    select_tracked_person,
     BoundingBox,
+    draw_detections,
+    draw_tracked,
+    select_tracked_person,
 )
 from MotorControllerInterface.motor_controller import (
+    DEFAULT_PORT,
+    MAX_ANGLE,
+    MIN_ANGLE,
     SERVO_PAN,
     SERVO_TILT,
-    MIN_ANGLE,
-    MAX_ANGLE,
+    MotorController,
+    motor_controller_available,
 )
 
-# -- tuning constants -----------------------------------------------------
-
-FRAME_W = 640
-FRAME_H = 480
-
-# Approximate camera field-of-view (degrees)
 HFOV = 60.0
 VFOV = 45.0
-
-# Degrees per pixel
-DEG_PER_PX_X = HFOV / FRAME_W
-DEG_PER_PX_Y = VFOV / FRAME_H
-
-# Ignore errors smaller than this (pixels) to avoid jitter
 DEADZONE_PX = 20
 
 
 def clamp_angle(angle: float) -> int:
-    """Clamp a float angle to the valid servo range and round to int."""
     return max(MIN_ANGLE, min(MAX_ANGLE, int(round(angle))))
 
 
-def main() -> None:
-    if not ai_camera_available():
-        print("AI Camera (IMX500) is not available.")
-        print("Install: sudo apt install -y python3-picamera2 imx500-models")
-        return
+def _display_available() -> bool:
+    try:
+        cv2.namedWindow("__test__", cv2.WINDOW_NORMAL)
+        cv2.destroyWindow("__test__")
+        return True
+    except cv2.error:
+        return False
 
-    frame_cx = FRAME_W // 2
-    frame_cy = FRAME_H // 2
 
-    # Start both servos at center
+def run(
+    width: int = 640,
+    height: int = 480,
+    show_all: bool = False,
+    headless: bool = False,
+    confidence: float = 0.3,
+    dry_run: bool = False,
+    port: str = DEFAULT_PORT,
+) -> None:
+    frame_center: Tuple[int, int] = (width // 2, height // 2)
+    frame_cx, frame_cy = frame_center
+    deg_per_px_x = HFOV / width
+    deg_per_px_y = VFOV / height
+
+    tracked: BoundingBox | None = None
+    shutdown = False
     pan_angle = 90.0
     tilt_angle = 90.0
-    prev_center = None
 
-    print("=" * 60)
-    print("  Interface Test: AI Camera  ->  Motor Controller (dry run)")
-    print("=" * 60)
-    print(f"  Frame size   : {FRAME_W}x{FRAME_H}")
-    print(f"  Camera FoV   : {HFOV}° x {VFOV}°")
-    print(f"  Dead-zone    : {DEADZONE_PX} px")
-    print(f"  Starting pose: pan={int(pan_angle)}°  tilt={int(tilt_angle)}°")
-    print("=" * 60)
-    print("Press Ctrl+C to stop.\n")
+    if not headless and not _display_available():
+        print("OpenCV has no GUI support. Running headless.")
+        headless = True
 
-    with AICameraFeed(width=FRAME_W, height=FRAME_H) as cam:
-        for frame, persons in cam.frames():
-            tracked = select_tracked_person(
-                persons, prev_center, (frame_cx, frame_cy)
-            )
+    def on_signal(*_args: object) -> None:
+        nonlocal shutdown
+        shutdown = True
 
-            if tracked is None:
-                print("[no person detected]")
-                prev_center = None
-                time.sleep(0.1)
-                continue
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
 
-            prev_center = tracked.center
-            px, py = tracked.center
+    # --- Motor controller setup ---
+    mc: MotorController | None = None
+    motor_ok = False
 
-            # Pixel error from frame center (positive = right / down)
-            err_x = px - frame_cx
-            err_y = py - frame_cy
+    if not dry_run and motor_controller_available(port):
+        try:
+            mc = MotorController(port=port)
+            mc.open()
+            motor_ok = mc.wake()
+            if motor_ok:
+                print(f"STM32 on {port}: connected and awake.")
+            else:
+                print(f"STM32 on {port}: wake failed; servo commands will only print.")
+                mc.close()
+                mc = None
+        except Exception as e:
+            print(f"STM32 UART error: {e}. Servo commands will only print.")
+            mc = None
+    elif not dry_run:
+        print(f"No STM32 on {port}. Servo commands will only print.")
 
-            in_deadzone_x = abs(err_x) < DEADZONE_PX
-            in_deadzone_y = abs(err_y) < DEADZONE_PX
+    last_pan_cmd: int | None = None
+    last_tilt_cmd: int | None = None
 
-            # Convert pixel error to degree adjustment
-            delta_pan = err_x * DEG_PER_PX_X
-            delta_tilt = err_y * DEG_PER_PX_Y
+    print(f"Camera {width}x{height}, confidence={confidence}, FoV={HFOV}x{VFOV}")
+    print("Press q or Ctrl+C to stop.\n")
 
-            # Apply adjustments (only outside deadzone)
-            if not in_deadzone_x:
-                pan_angle = clamp_angle(pan_angle + delta_pan)
-            if not in_deadzone_y:
-                tilt_angle = clamp_angle(tilt_angle + delta_tilt)
+    with AICameraFeed(width=width, height=height, confidence_threshold=confidence) as cam:
+        for frame, person_boxes in cam.frames():
+            if shutdown:
+                break
 
-            pan_cmd = clamp_angle(pan_angle)
-            tilt_cmd = clamp_angle(tilt_angle)
+            previous_center = tracked.center if tracked is not None else None
+            tracked = select_tracked_person(person_boxes, previous_center, frame_center)
 
-            # Build human-readable direction strings
-            h_dir = "RIGHT" if err_x > 0 else "LEFT " if err_x < 0 else "CENTER"
-            v_dir = "DOWN " if err_y > 0 else "UP   " if err_y < 0 else "CENTER"
+            if show_all:
+                draw_detections(frame, person_boxes, color=(100, 100, 255), thickness=1)
+            draw_tracked(frame, tracked, color=(0, 255, 0), thickness=2)
 
-            print(
-                f"Person at ({px:4d},{py:4d})  "
-                f"err=({err_x:+4d},{err_y:+4d})px  "
-                f"[{h_dir} {v_dir}]  "
-                f"-->  mc.set_angle({SERVO_PAN}, {pan_cmd:3d})  "
-                f"mc.set_angle({SERVO_TILT}, {tilt_cmd:3d})"
-            )
+            if tracked is not None:
+                px, py = tracked.center
+                err_x = px - frame_cx
+                err_y = py - frame_cy
 
-            time.sleep(0.1)
+                delta_pan = -err_x * deg_per_px_x
+                delta_tilt = err_y * deg_per_px_y
+
+                if abs(err_x) >= DEADZONE_PX:
+                    pan_angle = clamp_angle(pan_angle + delta_pan)
+                if abs(err_y) >= DEADZONE_PX:
+                    tilt_angle = clamp_angle(tilt_angle + delta_tilt)
+
+                pan_cmd = clamp_angle(pan_angle)
+                tilt_cmd = clamp_angle(tilt_angle)
+
+                h_dir = "RIGHT" if err_x > 0 else "LEFT " if err_x < 0 else "CTR  "
+                v_dir = "DOWN " if err_y > 0 else "UP   " if err_y < 0 else "CTR  "
+
+                print(
+                    f"Person ({px:4d},{py:4d})  "
+                    f"err=({err_x:+4d},{err_y:+4d})  "
+                    f"[{h_dir} {v_dir}]  "
+                    f"pan={pan_cmd:3d}  tilt={tilt_cmd:3d}"
+                )
+
+                if motor_ok and mc is not None:
+                    if pan_cmd != last_pan_cmd:
+                        mc.set_pan(pan_cmd)
+                        last_pan_cmd = pan_cmd
+                    if tilt_cmd != last_tilt_cmd:
+                        mc.set_tilt(tilt_cmd)
+                        last_tilt_cmd = tilt_cmd
+
+                if not headless:
+                    cv2.line(frame, (frame_cx, frame_cy), (px, py), (200, 200, 0), 1)
+                    info = f"pan={pan_cmd} tilt={tilt_cmd}  err=({err_x:+d},{err_y:+d})"
+                    cv2.putText(frame, info, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+            if not headless:
+                try:
+                    cv2.imshow("Person tracker + servo", frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q") or key == 27:
+                        break
+                except cv2.error:
+                    headless = True
+
+    # Cleanup
+    if mc is not None and mc.is_open:
+        try:
+            mc.sleep()
+        except Exception:
+            pass
+        mc.close()
+
+    if not headless:
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="AI camera person tracking with motor controller output."
+    )
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--show-all", action="store_true", help="Draw all detections")
+    parser.add_argument("--headless", action="store_true", help="No GUI window")
+    parser.add_argument("--confidence", type=float, default=0.3)
+    parser.add_argument("--dry-run", action="store_true", help="Skip STM32 UART")
+    parser.add_argument("--port", type=str, default=DEFAULT_PORT)
+    args = parser.parse_args()
+    run(
+        width=args.width,
+        height=args.height,
+        show_all=args.show_all,
+        headless=args.headless,
+        confidence=args.confidence,
+        dry_run=args.dry_run,
+        port=args.port,
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nStopped.")
+    sys.exit(main())

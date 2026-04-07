@@ -1,18 +1,16 @@
 """
-STM32 Nucleo servo motor controller over UART.
+STM32 Nucleo servo control over UART (text commands).
 
-Sends angle commands (in degrees) to an STM32 Nucleo board that drives
-two servos (pan / tilt).  The Nucleo appears as /dev/ttyACM0 when
-connected to the Raspberry Pi via USB.
+The Nucleo appears as /dev/ttyACM0 when connected to the Raspberry Pi via USB.
 
-UART protocol (Pi -> STM32):
-  "<servo_id>,<angle>\n"
-    servo_id : 1 or 2
-    angle    : integer 0-180
+Firmware protocol (line-terminated with \\n), extended firmware:
+  wake           - PWM on; pan scan may run
+  sleep          - home both servos, PWM off
+  auto           - turn pan scan back on (after manual angles)
+  <id>,<angle>   - e.g. 1,90  (servo 1 = pan / TIM3_CH2, 2 = tilt / TIM3_CH1)
+                   angle 0-180 maps to 1000-2000 us. Replies OK or ERR.
 
-STM32 response:
-  "OK\n"  on success
-  "ERR\n" on failure
+Character echo + prompts still appear on the wire; helpers wait for keywords.
 
 Requires:
   pip install pyserial
@@ -26,26 +24,24 @@ from typing import Optional
 import serial
 
 
-# Defaults
 DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_BAUD = 115200
-DEFAULT_TIMEOUT = 1.0        # seconds
+DEFAULT_TIMEOUT = 2.0
 
-SERVO_PAN  = 1               # horizontal axis
-SERVO_TILT = 2               # vertical axis
-
+SERVO_PAN = 1
+SERVO_TILT = 2
 MIN_ANGLE = 0
 MAX_ANGLE = 180
 
 
 class MotorController:
     """
-    Controls two servos on an STM32 Nucleo via UART.
-
     Usage:
         with MotorController() as mc:
+            mc.wake()
             mc.set_angle(SERVO_PAN, 90)
-            mc.set_angle(SERVO_TILT, 45)
+            mc.enable_auto_scan()
+            mc.sleep()
     """
 
     def __init__(
@@ -59,8 +55,6 @@ class MotorController:
         self._timeout = timeout
         self._serial: Optional[serial.Serial] = None
 
-    # -- context manager --------------------------------------------------
-
     def __enter__(self) -> MotorController:
         self.open()
         return self
@@ -68,10 +62,7 @@ class MotorController:
     def __exit__(self, *args: object) -> None:
         self.close()
 
-    # -- connection -------------------------------------------------------
-
     def open(self) -> None:
-        """Open the UART connection to the STM32 Nucleo."""
         if self._serial is not None and self._serial.is_open:
             return
         self._serial = serial.Serial(
@@ -79,12 +70,10 @@ class MotorController:
             baudrate=self._baudrate,
             timeout=self._timeout,
         )
-        # Give the STM32 time to reset after serial open
         time.sleep(2)
         self._serial.reset_input_buffer()
 
     def close(self) -> None:
-        """Close the UART connection."""
         if self._serial is not None:
             try:
                 self._serial.close()
@@ -96,57 +85,76 @@ class MotorController:
     def is_open(self) -> bool:
         return self._serial is not None and self._serial.is_open
 
-    # -- core commands ----------------------------------------------------
-
-    def _send(self, message: str) -> str:
-        """Send a message and return the response line from the STM32."""
+    def _send_line(self, line: str) -> None:
         if self._serial is None or not self._serial.is_open:
             raise RuntimeError("UART connection is not open")
-        self._serial.write(f"{message}\n".encode("ascii"))
+        self._serial.write(f"{line}\n".encode("ascii"))
         self._serial.flush()
-        response = self._serial.readline().decode("ascii").strip()
-        return response
+
+    def _read_until(
+        self,
+        *needles: str,
+        timeout: Optional[float] = None,
+    ) -> str:
+        if self._serial is None or not self._serial.is_open:
+            raise RuntimeError("UART connection is not open")
+        limit = timeout if timeout is not None else self._timeout
+        deadline = time.monotonic() + limit
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            n = self._serial.in_waiting
+            if n:
+                buf.extend(self._serial.read(n))
+                text = buf.decode("ascii", errors="replace")
+                for needle in needles:
+                    if needle in text:
+                        return text
+            else:
+                time.sleep(0.01)
+        return buf.decode("ascii", errors="replace")
+
+    def wake(self) -> bool:
+        self._serial.reset_input_buffer()
+        self._send_line("wake")
+        text = self._read_until("Awake", "Unknown", timeout=self._timeout)
+        return "Awake" in text
+
+    def sleep(self) -> bool:
+        self._serial.reset_input_buffer()
+        self._send_line("sleep")
+        text = self._read_until("Sleeping", "Unknown", timeout=self._timeout)
+        return "Sleeping" in text
+
+    def enable_auto_scan(self) -> bool:
+        """Re-enable pan sweep on the MCU (command ``auto``)."""
+        self._serial.reset_input_buffer()
+        self._send_line("auto")
+        text = self._read_until("Auto scan on", "ERR", timeout=self._timeout)
+        return "Auto scan on" in text
 
     def set_angle(self, servo_id: int, angle: int) -> bool:
         """
-        Command a servo to move to the given angle in degrees.
-
-        Parameters
-        ----------
-        servo_id : int
-            Which servo to move (SERVO_PAN = 1, SERVO_TILT = 2).
-        angle : int
-            Target angle in degrees (0 – 180).
-
-        Returns
-        -------
-        bool
-            True if the STM32 acknowledged the command.
+        Send ``<servo_id>,<angle>``. Returns True if firmware answers with OK.
         """
         if servo_id not in (SERVO_PAN, SERVO_TILT):
-            raise ValueError(f"Invalid servo_id {servo_id}; must be {SERVO_PAN} or {SERVO_TILT}")
+            raise ValueError(f"Invalid servo_id {servo_id}; use {SERVO_PAN} or {SERVO_TILT}")
         angle = max(MIN_ANGLE, min(MAX_ANGLE, int(angle)))
-        response = self._send(f"{servo_id},{angle}")
-        return response == "OK"
+        self._serial.reset_input_buffer()
+        self._send_line(f"{servo_id},{angle}")
+        text = self._read_until("OK", "ERR", timeout=self._timeout)
+        return "OK" in text and "ERR" not in text
 
     def set_pan(self, angle: int) -> bool:
-        """Move the pan (horizontal) servo to *angle* degrees."""
         return self.set_angle(SERVO_PAN, angle)
 
     def set_tilt(self, angle: int) -> bool:
-        """Move the tilt (vertical) servo to *angle* degrees."""
         return self.set_angle(SERVO_TILT, angle)
 
-    def center(self) -> None:
-        """Center both servos to 90 degrees."""
-        self.set_pan(90)
-        self.set_tilt(90)
+    def center(self) -> bool:
+        return self.set_pan(90) and self.set_tilt(90)
 
-
-# -- module-level helpers -------------------------------------------------
 
 def motor_controller_available(port: str = DEFAULT_PORT) -> bool:
-    """Return True if the STM32 Nucleo serial port exists and can be opened."""
     try:
         with serial.Serial(port, DEFAULT_BAUD, timeout=0.5) as s:
             return s.is_open

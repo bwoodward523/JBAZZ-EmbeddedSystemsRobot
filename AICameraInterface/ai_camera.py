@@ -11,6 +11,7 @@ Requires:
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Generator, List, Tuple
 
@@ -95,8 +96,14 @@ DEFAULT_MODEL = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite
 
 
 def _frame_to_bgr(frame: np.ndarray) -> np.ndarray:
+    """
+    Picamera2 XBGR8888 / XRGB8888 buffers are reshaped to (H, W, 4). The first
+    three bytes per pixel are already B, G, R in memory (V4L2 BGR32-style layout
+    for XBGR8888). Using [:, :, 1:4] wrongly drops B and uses padding as blue,
+    which looks black or very dark in OpenCV.
+    """
     if frame.ndim == 3 and frame.shape[2] == 4:
-        return frame[:, :, 1:4].copy()
+        return frame[:, :, :3].copy()
     if frame.ndim == 3 and frame.shape[2] == 3 and cv2 is not None:
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     return frame
@@ -259,6 +266,28 @@ class AICameraFeed:
         )
         self._picam2.configure(config)
         self._picam2.start()
+
+    def wait_until_ready(self, timeout: float = 15.0, verbose: bool = True) -> None:
+        """Block until the sensor produces non-black frames (IMX500 firmware load)."""
+        if self._picam2 is None:
+            return
+        if verbose:
+            print("Waiting for AI camera to warm up...", end="", flush=True)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                frame, _ = self.capture_frame_and_persons()
+                if frame.mean() > 1.0:
+                    if verbose:
+                        print(" ready.")
+                    return
+            except Exception:
+                pass
+            time.sleep(0.3)
+            if verbose:
+                print(".", end="", flush=True)
+        if verbose:
+            print(" timed out (frames may still be dark).")
 
     def stop(self) -> None:
         if self._picam2 is not None:

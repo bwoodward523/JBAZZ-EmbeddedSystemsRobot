@@ -1,10 +1,11 @@
-"""Quick test for the STM32 Nucleo servo motor controller."""
+"""Exercise wake / sleep / auto / angle commands on the STM32 Nucleo."""
 
 import time
+
 from motor_controller import (
+    DEFAULT_PORT,
     MotorController,
     motor_controller_available,
-    DEFAULT_PORT,
 )
 
 
@@ -12,30 +13,32 @@ def main() -> None:
     port = DEFAULT_PORT
     if not motor_controller_available(port):
         print(f"STM32 Nucleo not found on {port}")
-        print("Make sure the board is connected via USB and the port is correct.")
+        print("Connect USB and check the device path (ls /dev/ttyACM*).")
         return
 
-    print(f"STM32 Nucleo found on {port}. Centering servos...")
+    print(f"Using {port}.\n")
+
     with MotorController(port=port) as mc:
-        mc.center()
-        print("Servos centered to 90 degrees.")
+        ok = mc.wake()
+        print(f"wake       -> {'OK' if ok else 'FAIL'}")
 
-        # Sweep pan servo
-        print("\nSweeping pan servo:")
-        for angle in range(0, 181, 30):
-            ok = mc.set_pan(angle)
-            print(f"  Pan -> {angle}°  {'OK' if ok else 'FAIL'}")
-            time.sleep(0.5)
+        ok = mc.set_pan(45)
+        print(f"1,45 (pan) -> {'OK' if ok else 'FAIL'}")
+        time.sleep(0.5)
+        ok = mc.set_tilt(135)
+        print(f"2,135 tilt -> {'OK' if ok else 'FAIL'}")
+        time.sleep(0.5)
+        ok = mc.center()
+        print(f"center     -> {'OK' if ok else 'FAIL'}")
 
-        # Sweep tilt servo
-        print("\nSweeping tilt servo:")
-        for angle in range(0, 181, 30):
-            ok = mc.set_tilt(angle)
-            print(f"  Tilt -> {angle}°  {'OK' if ok else 'FAIL'}")
-            time.sleep(0.5)
+        ok = mc.enable_auto_scan()
+        print(f"auto scan  -> {'OK' if ok else 'FAIL'}")
+        time.sleep(2)
 
-        mc.center()
-        print("\nServos re-centered. Done.")
+        ok = mc.sleep()
+        print(f"sleep      -> {'OK' if ok else 'FAIL'}")
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":
