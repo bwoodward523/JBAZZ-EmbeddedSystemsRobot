@@ -1,14 +1,21 @@
 """
-STM32 Nucleo servo control over UART (text commands).
+STM32 Nucleo servo/motor control over UART (text commands).
 
 The Nucleo appears as /dev/ttyACM0 when connected to the Raspberry Pi via USB.
 
-Firmware protocol (line-terminated with \\n), extended firmware:
-  wake           - PWM on; pan scan may run
-  sleep          - home both servos, PWM off
-  auto           - turn pan scan back on (after manual angles)
-  <id>,<angle>   - e.g. 1,90  (servo 1 = pan / TIM3_CH2, 2 = tilt / TIM3_CH1)
-                   angle 0-180 maps to 1000-2000 us. Replies OK or ERR.
+Firmware protocol (line-terminated with \\n):
+  wake              — enable servos, go to home positions; replies "Awake"
+  sleep             — home all servos, motors off, PWM off; replies "Sleeping"
+  auto              — pan sweeps 0-270° MCU-controlled; replies "Auto scan on"
+  home              — pan returns to center (135°); replies "OK"
+  motors on         — spin up flywheels; replies "OK"
+  motors off        — stop flywheels; replies "OK"
+  push              — one dart push cycle; replies "OK"
+  fire              — motors on + push (50 ms MCU-timed spin-up); replies "OK"
+  test              — run full servo/motor test sequence; replies "OK"
+  1,<angle>         — pan servo, 0-270°; replies OK or ERR
+  2,<angle>         — tilt servo, 0-180°; replies OK or ERR
+  3,<angle>         — pusher servo, 0-180° (prefer `fire` over direct control)
 
 Character echo + prompts still appear on the wire; helpers wait for keywords.
 
@@ -28,10 +35,20 @@ DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT = 2.0
 
-SERVO_PAN = 1
-SERVO_TILT = 2
-MIN_ANGLE = 0
-MAX_ANGLE = 180
+SERVO_PAN    = 1
+SERVO_TILT   = 2
+SERVO_PUSHER = 3
+
+MIN_ANGLE        = 0
+MAX_ANGLE_PAN    = 270   # pan servo physical range
+MAX_ANGLE_TILT   = 180   # tilt servo physical range
+MAX_ANGLE_PUSHER = 180   # pusher servo physical range (use fire, not direct)
+
+_SERVO_MAX = {
+    SERVO_PAN:    MAX_ANGLE_PAN,
+    SERVO_TILT:   MAX_ANGLE_TILT,
+    SERVO_PUSHER: MAX_ANGLE_PUSHER,
+}
 
 
 class MotorController:
@@ -39,7 +56,9 @@ class MotorController:
     Usage:
         with MotorController() as mc:
             mc.wake()
-            mc.set_angle(SERVO_PAN, 90)
+            mc.set_angle(SERVO_PAN, 135)    # pan center on 0-270° range
+            mc.set_angle(SERVO_TILT, 90)    # tilt center
+            mc.fire()                        # fire one dart
             mc.enable_auto_scan()
             mc.sleep()
     """
@@ -134,11 +153,16 @@ class MotorController:
 
     def set_angle(self, servo_id: int, angle: int) -> bool:
         """
-        Send ``<servo_id>,<angle>``. Returns True if firmware answers with OK.
+        Send ``<servo_id>,<angle>``.
+        Pan (1): 0-270°.  Tilt (2): 0-180°.  Pusher (3): 0-180°.
+        Prefer `fire()` over direct pusher control.
+        Returns True if firmware answers with OK.
         """
-        if servo_id not in (SERVO_PAN, SERVO_TILT):
-            raise ValueError(f"Invalid servo_id {servo_id}; use {SERVO_PAN} or {SERVO_TILT}")
-        angle = max(MIN_ANGLE, min(MAX_ANGLE, int(angle)))
+        if servo_id not in _SERVO_MAX:
+            raise ValueError(
+                f"Invalid servo_id {servo_id}; use SERVO_PAN, SERVO_TILT, or SERVO_PUSHER"
+            )
+        angle = max(MIN_ANGLE, min(_SERVO_MAX[servo_id], int(angle)))
         self._serial.reset_input_buffer()
         self._send_line(f"{servo_id},{angle}")
         text = self._read_until("OK", "ERR", timeout=self._timeout)
@@ -151,7 +175,50 @@ class MotorController:
         return self.set_angle(SERVO_TILT, angle)
 
     def center(self) -> bool:
-        return self.set_pan(90) and self.set_tilt(90)
+        """Move pan to 135° (center of 0-270° range) and tilt to 90°."""
+        return self.set_pan(135) and self.set_tilt(90)
+
+    def home(self) -> bool:
+        """Pan returns to center (135°) via ``home`` command."""
+        self._serial.reset_input_buffer()
+        self._send_line("home")
+        text = self._read_until("OK", "ERR", timeout=self._timeout)
+        return "OK" in text and "ERR" not in text
+
+    def motors_on(self) -> bool:
+        """Spin up flywheels."""
+        self._serial.reset_input_buffer()
+        self._send_line("motors on")
+        text = self._read_until("OK", "ERR", timeout=self._timeout)
+        return "OK" in text and "ERR" not in text
+
+    def motors_off(self) -> bool:
+        """Stop flywheels."""
+        self._serial.reset_input_buffer()
+        self._send_line("motors off")
+        text = self._read_until("OK", "ERR", timeout=self._timeout)
+        return "OK" in text and "ERR" not in text
+
+    def push(self) -> bool:
+        """Execute one dart push cycle."""
+        self._serial.reset_input_buffer()
+        self._send_line("push")
+        text = self._read_until("OK", "ERR", timeout=self._timeout)
+        return "OK" in text and "ERR" not in text
+
+    def fire(self) -> bool:
+        """Fire one dart: spin flywheels + push with 50 ms MCU-side spin-up delay."""
+        self._serial.reset_input_buffer()
+        self._send_line("fire")
+        text = self._read_until("OK", "ERR", timeout=3.0)
+        return "OK" in text and "ERR" not in text
+
+    def test(self) -> bool:
+        """Run full servo/motor test sequence on MCU."""
+        self._serial.reset_input_buffer()
+        self._send_line("test")
+        text = self._read_until("OK", "ERR", timeout=10.0)
+        return "OK" in text and "ERR" not in text
 
 
 def motor_controller_available(port: str = DEFAULT_PORT) -> bool:

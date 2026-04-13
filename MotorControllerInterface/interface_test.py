@@ -34,7 +34,8 @@ from ai_camera import (
 )
 from MotorControllerInterface.motor_controller import (
     DEFAULT_PORT,
-    MAX_ANGLE,
+    MAX_ANGLE_PAN,
+    MAX_ANGLE_TILT,
     MIN_ANGLE,
     SERVO_PAN,
     SERVO_TILT,
@@ -47,8 +48,12 @@ VFOV = 45.0
 DEADZONE_PX = 20
 
 
-def clamp_angle(angle: float) -> int:
-    return max(MIN_ANGLE, min(MAX_ANGLE, int(round(angle))))
+def clamp_pan(angle: float) -> int:
+    return max(MIN_ANGLE, min(MAX_ANGLE_PAN, int(round(angle))))
+
+
+def clamp_tilt(angle: float) -> int:
+    return max(MIN_ANGLE, min(MAX_ANGLE_TILT, int(round(angle))))
 
 
 def _display_available() -> bool:
@@ -76,7 +81,7 @@ def run(
 
     tracked: BoundingBox | None = None
     shutdown = False
-    pan_angle = 90.0
+    pan_angle = 135.0
     tilt_angle = 90.0
 
     if not headless and not _display_available():
@@ -138,12 +143,12 @@ def run(
                 delta_tilt = err_y * deg_per_px_y
 
                 if abs(err_x) >= DEADZONE_PX:
-                    pan_angle = clamp_angle(pan_angle + delta_pan)
+                    pan_angle = clamp_pan(pan_angle + delta_pan)
                 if abs(err_y) >= DEADZONE_PX:
-                    tilt_angle = clamp_angle(tilt_angle + delta_tilt)
+                    tilt_angle = clamp_tilt(tilt_angle + delta_tilt)
 
-                pan_cmd = clamp_angle(pan_angle)
-                tilt_cmd = clamp_angle(tilt_angle)
+                pan_cmd = clamp_pan(pan_angle)
+                tilt_cmd = clamp_tilt(tilt_angle)
 
                 h_dir = "RIGHT" if err_x > 0 else "LEFT " if err_x < 0 else "CTR  "
                 v_dir = "DOWN " if err_y > 0 else "UP   " if err_y < 0 else "CTR  "

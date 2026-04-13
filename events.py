@@ -13,7 +13,10 @@ class EventType(Enum):
     SERVER_ERROR = auto()
     FINISHED_SPEAKING = auto()
     FINISHED_SHOOTING = auto()
+    FIRE_DART = auto()
     SEND_TO_SLEEP = auto()
+    PERSON_DETECTED = auto()
+    PERSON_LOST = auto()
 
 # Event container
 @dataclass

@@ -3,6 +3,7 @@ import struct
 import time
 from .tts import TTS
 from data_queues import display_queue
+from events import post_event, EventType
 
 HOST = "10.127.70.21"
 PORT = 5555
@@ -91,8 +92,9 @@ def run_client_thread():
 
                     if response[3]:
                         print(f"Shoot: {response[3]}")
+                        post_event(EventType.FIRE_DART, source="tcp_server")
                     else:
-                        print("LLM failed to return an emotion")
+                        print("LLM failed to return shoot signal")
 
                     if tts_model:
                         #Try to grab text from model
