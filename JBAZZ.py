@@ -10,7 +10,7 @@ from threads.tcp_server import run_client_thread
 from threads.tcp_server_sim import sim_run_client_thread
 from threads.mic import Microphone
 from threads.tts import TTS
-from led_display.show_emotions import show_emotions_thread
+from threads.display import show_emotions_thread
 from thread_controls import listen_event
 
 
@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     #Establish the conenction to the server ASAP
     print("hello")
-    sim_tcp = False
+    sim_tcp = True
     if not sim_tcp:
         threading.Thread(target=run_client_thread, daemon=True).start() 
     else:

@@ -1,6 +1,5 @@
 from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, ElevenlabsEngine
-from queue import Queue
-from data_queues import text_queue
+from data_queues import text_queue, TTS_END_OF_RESPONSE, tts_response_playback_done
 # print("hello")
 class TTS:
     def __init__(self):
@@ -18,32 +17,23 @@ class TTS:
         self.stream.play()
 
     
-#Use while stream.is_playing somewhere else to prevent code from moving past Until done speaking. 
-def tts_thread(tts : TTS):
-    #Enable async play right away
-    tts.stream.play_async(fast_sentence_fragment=False)
-
-    #Poll the text queue infinitely.
+# Use while stream.is_playing somewhere else to prevent code from moving past until done speaking.
+def tts_thread(tts: TTS):
     while True:
 
-        #This is a blocking call until data is provided.
-        text = text_queue.get()
-        # print(f"Data from the text_queue: {text} and type is {type(text)}")
-        if type(text)== str:
+        def response_tokens():
+            while True:
+                item = text_queue.get()
+                if item is TTS_END_OF_RESPONSE:
+                    break
+                if isinstance(item, str):
+                    yield item + " "
 
-            tts.stream.feed(text)
-
-
-
-# def tts_thread():
-#     tts = TTS()
-#     while True:
-#         if not text_queue.empty():
-#             print("consuming text")
-#             text = text_queue.get()
-#             if isinstance(text,str):
-#                 tts.stream.feed(text)
-#                 tts.stream.play_async()
+        tts.stream.feed(response_tokens())
+        tts.stream.play_async(fast_sentence_fragment=False)
+        if tts.stream.play_thread is not None:
+            tts.stream.play_thread.join()
+        tts_response_playback_done.set()
 
 
 

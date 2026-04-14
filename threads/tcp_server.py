@@ -2,7 +2,14 @@ import socket
 import struct
 import time
 from .tts import TTS, tts_thread
-from data_queues import display_queue, display_character_queue, shoot_queue, text_queue
+from data_queues import (
+    display_queue,
+    display_character_queue,
+    shoot_queue,
+    text_queue,
+    TTS_END_OF_RESPONSE,
+    tts_response_playback_done,
+)
 import threading
 
 HOST = "10.127.70.21"
@@ -49,18 +56,17 @@ def blocking_recv_state_machine(s,tts_model):
 
 
     while True:
-        #Receive payload from TCP server and decode it
+        # Receive payload from TCP server and decode it
         payload = recv_message(s)
-        payload = payload.decode('utf-8')
-        print(f'payload: {payload}')
-        #Determine if connection still exists
         if payload is None:
             print("Server closed connection.")
             break
+        payload = payload.decode("utf-8")
+        print(f"payload: {payload}")
 
         if STATE == RECV_STATES.EMOTION:
             #Parse the input for the emotion data
-            print(f"emotion data payload")
+            print(f"emotion data payload {payload}")
             try:
                 emotion = payload.split(":")[1]
                 print(f"Incoming emotion identified as: {emotion}")
@@ -83,26 +89,18 @@ def blocking_recv_state_machine(s,tts_model):
 
             #If change state payload is received from server, simply change the state.
             if payload == '''##TerminateCharacterStreamState##''':
+                tts_response_playback_done.clear()
+                text_queue.put(TTS_END_OF_RESPONSE)
                 STATE = RECV_STATES.SHOOT
-
 
             else:
                 print(f"Word received: {payload}")
-                #Feed the words to the display for later speech visualization
+                # Feed the words to the display for later speech visualization
                 display_character_queue.put(payload)
                 text_queue.put(payload)
-                # #Feed the payload data to the Text To Speech model
-                # try:
-                #     tts_model.stream.feed(payload)
-                #     tts_model.stream.play_async(log_synthesized_text=True)
-                            
-                # except Exception as e:
-                #     print(f"Error streaming words to TTS: {e}")
         
         elif STATE == RECV_STATES.SHOOT:
-            while tts_model.stream.is_playing():
-                print(f"Waiting for speaking.")
-                time.sleep(0.1)
+            tts_response_playback_done.wait()
             print(f"shoot payload: {payload}")
             break
     print("TCP Recv state machine completed processing.")
@@ -129,9 +127,9 @@ def run_client_thread():
         try:
           
             while True:
-                while tts_model.stream.is_playing():
-                    print(f"Saving the world ")
-                    time.sleep(0.1)
+                # while tts_model.stream.is_playing():
+                #     print(f"Saving the world ")
+                #     time.sleep(0.1)
                 #The mic recording will create an output.wav file when its complete.
                 #The mic will continue trying to record if no speech is detected inside of the audio.
                 #This is essentially a listen loop
@@ -164,57 +162,3 @@ if __name__ == "__main__":
     run_client_thread()
 
 
-
-
-# payload = recv_message(s)
-#                 if payload is None:
-#                     print("Server closed connection.")
-#                     break
-
-#                 response = payload.decode("utf-8")
-#                 print("Server:", response)
-                
-#                 #Parse server output. LLM is told to delimit by @#$ because it needs to be something the AI would not generate in conversation
-#                 response = response.split('@#$')
-#                 #Ensure we have three items in our returned message from the server before we try and operate 
-#                 print(f"size of list {len(response)} | response list = {response}")
-#                 if len(response) == 4:
-#                     print(response[1])
-#                     if response[1]:
-#                         emotion = response[1].split(":")
-#                         print(f"HERE IS THE EMOTION {emotion[1]}")
-#                         display_queue.put(emotion[1])
-#                     else:
-#                         print("LLM failed to return an emotion")
-                       
-
-#                     if response[2] == None:
-#                         print("Model failed to return a text response")
-
-#                     if response[3]:
-#                         print(f"Shoot: {response[3]}")
-#                     else:
-#                         print("LLM failed to return an emotion")
-
-#                     if tts_model:
-#                         #Try to grab text from model
-#                         words = response[2].split(":")
-#                         if words:
-#                             print(f"Words {words}")
-#                             tts_model.stream.feed(words[1])
-#                             tts_model.stream.play(log_synthesized_text=True)
-                        
-#                         else:
-#                             print(f"Error getting text from model")
-#                             tts_model.stream.feed("error getting returned text from model")
-#                             tts_model.stream.play(log_synthesized_text=True)
-#                     else:
-#                         print("No TTS")
-#                 else:
-#                     if tts_model:
-#                         print("List Was not of expected")
-#                         tts_model.stream.feed("list is not of size 4")
-#                         tts_model.stream.play()
-#                     else: 
-#                         print("List is not of size 4")
-#                 counter += 1
