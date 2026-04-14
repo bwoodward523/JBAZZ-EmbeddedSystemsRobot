@@ -136,6 +136,7 @@ VISEME_WEIGHTS = {
 
 emotion_cache = {}
 mouth_cache = {}
+invalid_mouth_warnings = set()
 
 geometry = piomatter.Geometry(
     width=width,
@@ -202,27 +203,32 @@ def phoneme_to_visemes(phonemes):
 def estimate_viseme_durations(visemes, word):
     if not visemes:
         return []
-
-    # Character-count heuristic (fallback until TTS callbacks provide timing).
-    base_duration_ms = int(100 + len(word) * 28)
-    word_duration_ms = max(130, min(460, base_duration_ms))
-
-    weights = [VISEME_WEIGHTS.get(viseme, 1.0) for viseme in visemes]
-    total_weight = sum(weights) if sum(weights) > 0 else len(weights)
-
-    durations = [int(word_duration_ms * (weight / total_weight)) for weight in weights]
-    durations = [max(50, min(180, duration)) for duration in durations]
-
-    delta = word_duration_ms - sum(durations)
-    index = 0
-    while delta != 0 and durations:
-        step = 1 if delta > 0 else -1
-        candidate = durations[index] + step
-        if 45 <= candidate <= 220:
-            durations[index] = candidate
-            delta -= step
-        index = (index + 1) % len(durations)
+    
+    durations = []
+    for i in range(len(visemes)):
+        durations.append(0.1)
+    
     return durations
+    # # Character-count heuristic (fallback until TTS callbacks provide timing).
+    # base_duration_ms = int(100 + len(word) * 28)
+    # word_duration_ms = max(130, min(460, base_duration_ms))
+
+    # weights = [VISEME_WEIGHTS.get(viseme, 1.0) for viseme in visemes]
+    # total_weight = sum(weights) if sum(weights) > 0 else len(weights)
+
+    # durations = [int(word_duration_ms * (weight / total_weight)) for weight in weights]
+    # durations = [max(50, min(180, duration)) for duration in durations]
+
+    # delta = word_duration_ms - sum(durations)
+    # index = 0
+    # while delta != 0 and durations:
+    #     step = 1 if delta > 0 else -1
+    #     candidate = durations[index] + step
+    #     if 45 <= candidate <= 220:
+    #         durations[index] = candidate
+    #         delta -= step
+    #     index = (index + 1) % len(durations)
+    # return durations
 
 
 # Returns the list of sprite events to render in order.
@@ -230,11 +236,9 @@ def process_incoming_word(word):
     normalized_word = normalize_word(word)
     if not normalized_word:
         return []
-
     phonemes = word_to_phonemes(normalized_word)
     visemes = phoneme_to_visemes(phonemes)
     durations = estimate_viseme_durations(visemes, normalized_word)
-
     events = []
     for viseme, duration_ms in zip(visemes, durations):
         sprite_file = VISEME_TO_SPRITE.get(viseme, VISEME_TO_SPRITE[DEFAULT_VISEME])
@@ -259,47 +263,79 @@ def sanitize_emotion(emotion):
 def load_emotion_image(emotion):
     if emotion not in emotion_cache:
         try:
-            emotion_cache[emotion] = Image.open(f"{BASE_EMOTION_DIR}/{emotion}.png").convert("RGBA")
+            emotion_cache[emotion] = np.asarray(
+                Image.open(f"{BASE_EMOTION_DIR}/{emotion}.png").convert("RGB"), dtype=np.uint8
+            )
         except Exception:
-            emotion_cache[emotion] = Image.open(f"{BASE_EMOTION_DIR}/{DEFAULT_EMOTION}.png").convert("RGBA")
+            emotion_cache[emotion] = np.asarray(
+                Image.open(f"{BASE_EMOTION_DIR}/{DEFAULT_EMOTION}.png").convert("RGB"), dtype=np.uint8
+            )
     return emotion_cache[emotion]
+
+
+def _load_raw_mouth_sprite(sprite_name):
+    return np.asarray(Image.open(f"{MOUTH_SPRITE_DIR}/{sprite_name}").convert("RGB"), dtype=np.uint8)
 
 
 def load_mouth_image(sprite_name):
     if sprite_name not in mouth_cache:
         try:
-            mouth_img = Image.open(f"{MOUTH_SPRITE_DIR}/{sprite_name}").convert("RGBA")
+            mouth_img = _load_raw_mouth_sprite(sprite_name)
         except Exception:
-            mouth_img = Image.open(
-                f"{MOUTH_SPRITE_DIR}/{VISEME_TO_SPRITE[DEFAULT_VISEME]}"
-            ).convert("RGBA")
-        if mouth_img.size != (width, height):
-            fitted = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            x_pos = max(0, (width - mouth_img.width) // 2)
-            y_pos = max(0, height - mouth_img.height)
-            fitted.paste(mouth_img, (x_pos, y_pos), mouth_img)
-            mouth_img = fitted
+            neutral_sprite = VISEME_TO_SPRITE[DEFAULT_VISEME]
+            try:
+                mouth_img = _load_raw_mouth_sprite(neutral_sprite)
+            except Exception:
+                if sprite_name not in invalid_mouth_warnings:
+                    print(
+                        f"Missing mouth sprite '{sprite_name}' and fallback '{neutral_sprite}'. "
+                        "Skipping talking frame."
+                    )
+                    invalid_mouth_warnings.add(sprite_name)
+                mouth_cache[sprite_name] = None
+                return None
+
+        if mouth_img.shape != (16, width, 3):
+            neutral_sprite = VISEME_TO_SPRITE[DEFAULT_VISEME]
+            if sprite_name not in invalid_mouth_warnings:
+                print(
+                    f"Mouth sprite '{sprite_name}' has invalid shape {mouth_img.shape}. "
+                    f"Expected (16, {width}, 3). Using neutral fallback."
+                )
+                invalid_mouth_warnings.add(sprite_name)
+            if sprite_name != neutral_sprite:
+                return load_mouth_image(neutral_sprite)
+            mouth_cache[sprite_name] = None
+            return None
+
         mouth_cache[sprite_name] = mouth_img
     return mouth_cache[sprite_name]
 
 
 def show_full_emotion(emotion):
-    emotion_img = load_emotion_image(emotion).convert("RGB")
-    framebuffer[:] = np.asarray(emotion_img)
+    emotion_img = load_emotion_image(emotion)
+    framebuffer[:] = emotion_img
     matrix.show()
 
 
 def show_emotion_with_mouth(emotion, mouth_sprite):
-    base = load_emotion_image(emotion).copy()
     mouth = load_mouth_image(mouth_sprite)
-    base.alpha_composite(mouth)
-    framebuffer[:] = np.asarray(base.convert("RGB"))
+    if mouth is None:
+        return False
+
+    emotion_img = load_emotion_image(emotion)
+    frame = np.empty((height, width, 3), dtype=np.uint8)
+    frame[0:16, :, :] = emotion_img[0:16, :, :]
+    frame[16:32, :, :] = mouth[0:16, :, :]
+    framebuffer[:] = frame
     matrix.show()
+    return True
 
 
 
 
 def show_emotions_thread():
+    pass
     active_emotion = DEFAULT_EMOTION
     viseme_events = []
     active_event_end = 0.0
@@ -319,6 +355,8 @@ def show_emotions_thread():
         try:
             while True:
                 word = display_character_queue.get_nowait()
+                if DEBUG_VISEMES:
+                    print(f"Got word: {word} from dcq")
                 events = process_incoming_word(word)
                 if events:
                     viseme_events.extend(events)
@@ -331,9 +369,10 @@ def show_emotions_thread():
         if viseme_events:
             if now >= active_event_end:
                 next_event = viseme_events.pop(0)
-                show_emotion_with_mouth(active_emotion, next_event["sprite"])
-                active_event_end = now + (next_event["duration_ms"] / 1000.0)
-                is_talking = True
+                frame_shown = show_emotion_with_mouth(active_emotion, next_event["sprite"])
+                if frame_shown:
+                    active_event_end = now + (next_event["duration_ms"] / 1000.0)
+                    is_talking = True
         elif is_talking:
             # Idle state uses full emotion PNG for stronger personality effect.
             show_full_emotion(active_emotion)
