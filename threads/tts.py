@@ -1,9 +1,14 @@
-from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, ElevenlabsEngine
+from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, ElevenlabsEngine, KokoroEngine
 from data_queues import text_queue, TTS_END_OF_RESPONSE, tts_response_playback_done
 # print("hello")
 class TTS:
     def __init__(self):
-        self.engine = SystemEngine(voice="en-us-nyc",print_installed_voices=False) 
+        # self.engine = SystemEngine(voice="en-us-nyc",print_installed_voices=False) 
+        self.engine = KokoroEngine(voice="af_heart", default_speed = 1.0, debug = False)
+
+        # def on_word_spoken(timing):
+        #     print(timing.word, timing.start_time, timing.end_time)
+
         self.stream = TextToAudioStream(self.engine, )
         # print(f"voices: {self.engine.get_voices()}")
         # self.stream.feed("Hello world! How are you today?")

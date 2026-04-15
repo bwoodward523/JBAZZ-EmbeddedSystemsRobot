@@ -206,7 +206,7 @@ def estimate_viseme_durations(visemes, word):
     
     durations = []
     for i in range(len(visemes)):
-        durations.append(0.1)
+        durations.append(100)
     
     return durations
     # # Character-count heuristic (fallback until TTS callbacks provide timing).
