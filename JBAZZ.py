@@ -2,17 +2,16 @@
 #JBazz will need his state machine to be implemented as well
 #This is our state machine file or main thread
 
+import os
 import signal
 import threading
 import time
+
+# Raspberry Pi Connect (wayvnc) runs Wayland; set DISPLAY so OpenCV windows work
+os.environ.setdefault("DISPLAY", ":0")
+
 from transitions import Machine
 from events import *
-from threads.tcp_server import run_client_thread
-from threads.tcp_server_sim import sim_run_client_thread
-from threads.mic import Microphone
-from threads.tts import TTS
-from threads.camera_servo_thread import run_camera_servo_thread
-from led_display.show_emotions import show_emotions_thread
 from thread_controls import listen_event, camera_servo_stop_event, fire_event
 
 
@@ -116,16 +115,40 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    def _manual_fire_thread():
+        print("[JBAZZ] Press ENTER at any time to fire a dart.")
+        while not _shutting_down.is_set():
+            try:
+                input()
+                if jbazz.state == 'tracking':
+                    print("[JBAZZ] Manual fire triggered!")
+                    post_event(EventType.FIRE_DART, source="manual")
+                elif jbazz.state in ('scanning', 'firing'):
+                    # Fire directly via the camera thread's fire_event so it works
+                    # even if the state machine isn't in tracking yet
+                    print(f"[JBAZZ] Manual fire triggered (state={jbazz.state}, firing directly)")
+                    fire_event.set()
+                else:
+                    print(f"[JBAZZ] Can't fire — state is '{jbazz.state}'")
+            except EOFError:
+                break
+
+    threading.Thread(target=_manual_fire_thread, daemon=True).start()
+
     if ENABLE_CAMERA_TRACKING:
+        from threads.camera_servo_thread import run_camera_servo_thread
         print(jbazz.state)
 
         if ENABLE_TCP:
             if not sim_tcp:
+                from threads.tcp_server import run_client_thread
                 threading.Thread(target=run_client_thread, daemon=True).start()
             else:
+                from threads.tcp_server_sim import sim_run_client_thread
                 threading.Thread(target=sim_run_client_thread, daemon=True).start()
 
         if ENABLE_DISPLAY:
+            from led_display.show_emotions import show_emotions_thread
             threading.Thread(target=show_emotions_thread, daemon=True).start()
 
         # Kick off scanning immediately on startup

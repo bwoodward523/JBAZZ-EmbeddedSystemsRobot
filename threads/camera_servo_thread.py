@@ -53,10 +53,10 @@ DEADZONE_PX = 20        # ignore error smaller than this (prevents jitter)
 CONFIDENCE  = 0.3       # person detection confidence threshold
 
 # --- Scan sweep ---
-SCAN_MIN   = 75         # leftmost pan angle (degrees) — 135° center - 60°
-SCAN_MAX   = 195        # rightmost pan angle (degrees) — 135° center + 60°
+SCAN_MIN   = 0          # leftmost pan angle (degrees)
+SCAN_MAX   = 270        # rightmost pan angle (degrees)
 SCAN_TILT  = 85         # fixed tilt during scan (slightly below center)
-SCAN_STEP  = 5          # degrees per sweep step
+SCAN_STEP  = 10         # degrees per sweep step
 SCAN_DELAY = 0.12       # seconds between sweep steps
 
 # --- Lost grace period ---

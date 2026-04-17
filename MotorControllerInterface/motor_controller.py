@@ -107,7 +107,11 @@ class MotorController:
     def _send_line(self, line: str) -> None:
         if self._serial is None or not self._serial.is_open:
             raise RuntimeError("UART connection is not open")
-        self._serial.write(f"{line}\n".encode("ascii"))
+        for char in line:
+            self._serial.write(char.encode("ascii"))
+            self._serial.flush()
+            time.sleep(0.01)       # 10ms between chars so STM32 can process each one
+        self._serial.write(b"\r")
         self._serial.flush()
 
     def _read_until(
@@ -132,11 +136,16 @@ class MotorController:
                 time.sleep(0.01)
         return buf.decode("ascii", errors="replace")
 
-    def wake(self) -> bool:
-        self._serial.reset_input_buffer()
-        self._send_line("wake")
-        text = self._read_until("Awake", "Unknown", timeout=self._timeout)
-        return "Awake" in text
+    def wake(self, retries: int = 5, retry_delay: float = 1.0) -> bool:
+        for attempt in range(1, retries + 1):
+            self._serial.reset_input_buffer()
+            self._send_line("wake")
+            text = self._read_until("Awake", "Unknown", timeout=self._timeout)
+            if "Awake" in text:
+                return True
+            print(f"[MotorController] wake attempt {attempt}/{retries} failed, retrying...")
+            time.sleep(retry_delay)
+        return False
 
     def sleep(self) -> bool:
         self._serial.reset_input_buffer()
@@ -148,14 +157,16 @@ class MotorController:
         """Re-enable pan sweep on the MCU (command ``auto``)."""
         self._serial.reset_input_buffer()
         self._send_line("auto")
-        text = self._read_until("Auto scan on", "ERR", timeout=self._timeout)
-        return "Auto scan on" in text
+        text = self._read_until("Auto scan:", "ERR", timeout=self._timeout)
+        return "Auto scan:" in text
 
-    def set_angle(self, servo_id: int, angle: int) -> bool:
+    def set_angle(self, servo_id: int, angle: int, speed: Optional[int] = None) -> bool:
         """
-        Send ``<servo_id>,<angle>``.
+        Send ``<servo_id>,<angle>`` or ``<servo_id>,<angle>,<speed>``.
         Pan (1): 0-270°.  Tilt (2): 0-180°.  Pusher (3): 0-180°.
-        Prefer `fire()` over direct pusher control.
+        speed: pan slew rate in deg/sec (pan only).
+               Omit for firmware default (90 deg/sec).
+               e.g. speed=45 for cinematic, speed=270 for near-instant.
         Returns True if firmware answers with OK.
         """
         if servo_id not in _SERVO_MAX:
@@ -163,13 +174,17 @@ class MotorController:
                 f"Invalid servo_id {servo_id}; use SERVO_PAN, SERVO_TILT, or SERVO_PUSHER"
             )
         angle = max(MIN_ANGLE, min(_SERVO_MAX[servo_id], int(angle)))
+        if speed is not None and servo_id == SERVO_PAN:
+            cmd = f"{servo_id},{angle},{int(speed)}"
+        else:
+            cmd = f"{servo_id},{angle}"
         self._serial.reset_input_buffer()
-        self._send_line(f"{servo_id},{angle}")
+        self._send_line(cmd)
         text = self._read_until("OK", "ERR", timeout=self._timeout)
         return "OK" in text and "ERR" not in text
 
-    def set_pan(self, angle: int) -> bool:
-        return self.set_angle(SERVO_PAN, angle)
+    def set_pan(self, angle: int, speed: Optional[int] = None) -> bool:
+        return self.set_angle(SERVO_PAN, angle, speed=speed)
 
     def set_tilt(self, angle: int) -> bool:
         return self.set_angle(SERVO_TILT, angle)
@@ -182,43 +197,51 @@ class MotorController:
         """Pan returns to center (135°) via ``home`` command."""
         self._serial.reset_input_buffer()
         self._send_line("home")
-        text = self._read_until("OK", "ERR", timeout=self._timeout)
-        return "OK" in text and "ERR" not in text
+        text = self._read_until("Pan homed", "ERR", timeout=self._timeout)
+        return "Pan homed" in text
 
     def motors_on(self) -> bool:
         """Spin up flywheels."""
         self._serial.reset_input_buffer()
         self._send_line("motors on")
-        text = self._read_until("OK", "ERR", timeout=self._timeout)
-        return "OK" in text and "ERR" not in text
+        text = self._read_until("Motors ON", "ERR", timeout=self._timeout)
+        print(f"[DEBUG motors_on] raw: {repr(text)}")
+        return "Motors ON" in text
 
     def motors_off(self) -> bool:
         """Stop flywheels."""
         self._serial.reset_input_buffer()
         self._send_line("motors off")
-        text = self._read_until("OK", "ERR", timeout=self._timeout)
-        return "OK" in text and "ERR" not in text
+        text = self._read_until("Motors OFF", "ERR", timeout=self._timeout)
+        print(f"[DEBUG motors_off] raw: {repr(text)}")
+        return "Motors OFF" in text
 
     def push(self) -> bool:
         """Execute one dart push cycle."""
         self._serial.reset_input_buffer()
         self._send_line("push")
-        text = self._read_until("OK", "ERR", timeout=self._timeout)
-        return "OK" in text and "ERR" not in text
+        text = self._read_until("Push", "ERR", timeout=self._timeout)
+        return "Push" in text
 
     def fire(self) -> bool:
-        """Fire one dart: spin flywheels + push with 50 ms MCU-side spin-up delay."""
-        self._serial.reset_input_buffer()
-        self._send_line("fire")
-        text = self._read_until("OK", "ERR", timeout=3.0)
-        return "OK" in text and "ERR" not in text
+        """Fire one dart: motors on, 0.5s spin-up, pusher 0->180, 0.5s travel, pusher back, 0.5s, motors off."""
+        if not self.motors_on():
+            return False
+        time.sleep(2)                          # spin-up
+        if not self.set_angle(SERVO_PUSHER, 0):
+            return False
+        time.sleep(2)                          # wait for servo to reach 0
+        if not self.set_angle(SERVO_PUSHER, 180):
+            return False
+        time.sleep(0.5)
+        return self.motors_off()
 
     def test(self) -> bool:
         """Run full servo/motor test sequence on MCU."""
         self._serial.reset_input_buffer()
         self._send_line("test")
-        text = self._read_until("OK", "ERR", timeout=10.0)
-        return "OK" in text and "ERR" not in text
+        text = self._read_until("TEST:", "ERR", timeout=10.0)
+        return "TEST:" in text
 
 
 def motor_controller_available(port: str = DEFAULT_PORT) -> bool:
