@@ -3,10 +3,11 @@ import time
 import numpy as np
 import PIL.Image as Image
 import adafruit_blinka_raspberry_pi5_piomatter as piomatter
+from data_queues import display_queue
 
 width = 32
 height = 32
-emotions = ["happy.png","surprise.png","fear.png","disgust.png","sad.png","anger.png"]
+emotions = ["happiness.png","surprise.png","fear.png","disgust.png","sadness.png","anger.png"]
 
 geometry = piomatter.Geometry(
     width=width,
@@ -27,10 +28,24 @@ matrix = piomatter.PioMatter(
 
 # with Image.open(gif_file) as img:
 def show_emotions_thread():
+    img = np.asarray(Image.open(f"led_display/assets/base_emotions/happiness.png").convert("RGB"))
+    framebuffer[:] = img[:, :, :]
+
+    matrix.show()
+    time.sleep(1)
     while True:
-        for i in range(len(emotions)):
-            img = np.asarray(Image.open(f"led_display/assets/base_emotions/{emotions[i]}").convert("RGB"))
+        emotion = display_queue.get()
+        # print(f"{emotion} hahahahahahahaha")
+
+        #Implement a function to try its best to turn non deterministic result into safe one from emotion. ie getting "anger" instead of anger. 
+        #Temp half-fix
+        emotion = emotion.replace('"', "")
+        emotion = emotion.replace(" ", "")
+        try:
+            img = np.asarray(Image.open(f"led_display/assets/base_emotions/{emotion}.png").convert("RGB"))
             framebuffer[:] = img[:, :, :]
 
             matrix.show()
-            time.sleep(1)
+        except Exception as e:
+            print(f"Failed to set display Error: {e}")
+        time.sleep(1)

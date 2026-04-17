@@ -1,9 +1,17 @@
 import socket
 import struct
 import time
-from .tts import TTS
-from data_queues import display_queue
 from events import post_event, EventType
+from .tts import TTS, tts_thread
+from data_queues import (
+    display_queue,
+    display_character_queue,
+    shoot_queue,
+    text_queue,
+    TTS_END_OF_RESPONSE,
+    tts_response_playback_done,
+)
+import threading
 
 HOST = "10.127.70.21"
 PORT = 5555
@@ -33,11 +41,84 @@ def recv_message(sock):
     return recv_exact(sock, length)
 
 
-def run_client_thread():
+from enum import Enum
+#Class used to denote which type of data we are expecting from the TCP server. 
+class RECV_STATES(Enum):
+    NONE = -1
+    EMOTION = 0
+    CHARACTERS = 1
+    SHOOT = 2
+
+#This function will use the states to parse incoming data from the server. It is intended to block the thread until all messages have been received
+#It will communicate to other threads by uploading data to queues.
+#PARAM - s == the socket
+def blocking_recv_state_machine(s,tts_model):
+    STATE = RECV_STATES.EMOTION
+
+
+    while True:
+        # Receive payload from TCP server and decode it
+        payload = recv_message(s)
+        if payload is None:
+            print("Server closed connection.")
+            break
+        payload = payload.decode("utf-8")
+        print(f"payload: {payload}")
+
+        if STATE == RECV_STATES.EMOTION:
+            #Parse the input for the emotion data
+            print(f"emotion data payload {payload}")
+            try:
+                emotion = payload.split(":")[1]
+                print(f"Incoming emotion identified as: {emotion}")
+                    
+                #Add the data to the display queue for the display thread to process. 
+                display_queue.put(emotion)
+
+            except IndexError as e:
+                print(f"Error: Index out of range. {e}")
+
+            #Basically if there is an error parsing the emotion we will jsut move forward cuz LOL
+            #AI could totally pick the wrong emotion :P
+
+            #Update the state to CHARACTERS
+            STATE = RECV_STATES.CHARACTERS
+        
+        elif STATE == RECV_STATES.CHARACTERS:
+            #validate the incoming string data as type str
+            assert type(payload) == str
+
+            #If change state payload is received from server, simply change the state.
+            if payload == '''##TerminateCharacterStreamState##''':
+                tts_response_playback_done.clear()
+                text_queue.put(TTS_END_OF_RESPONSE)
+                STATE = RECV_STATES.SHOOT
+
+            else:
+                print(f"Word received: {payload}")
+                # Feed the words to the display for later speech visualization
+                display_character_queue.put(payload)
+                text_queue.put(payload)
+        
+        elif STATE == RECV_STATES.SHOOT:
+            tts_response_playback_done.wait()
+            print(f"shoot payload: {payload}")
+            break
+    print("TCP Recv state machine completed processing.")
+def run_client_thread():    
     #Temporary microphhone creation in the TCP client. 
     #TODO: Move mic to JBAZZ once the file is ready to handle the TCP connection
     from .mic import Microphone
     mic = Microphone()
+
+
+    #Create TTS model
+    tts_model = TTS()
+
+    #initialize TTS thread for speaking
+    tts_thread_live = threading.Thread(target=tts_thread, args=(tts_model,))
+    tts_thread_live.start()
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
         print("Connected.")
@@ -47,9 +128,9 @@ def run_client_thread():
         try:
           
             while True:
-                while tts_model.stream.is_playing():
-                    print(f"Saving the world ")
-                    time.sleep(0.1)
+                # while tts_model.stream.is_playing():
+                #     print(f"Saving the world ")
+                #     time.sleep(0.1)
                 #The mic recording will create an output.wav file when its complete.
                 #The mic will continue trying to record if no speech is detected inside of the audio.
                 #This is essentially a listen loop
@@ -65,13 +146,8 @@ def run_client_thread():
                 #Send the data to the TCP server.
                 send_message(s, audio)
 
-                payload = recv_message(s)
-                if payload is None:
-                    print("Server closed connection.")
-                    break
-
-                response = payload.decode("utf-8")
-                print("Server:", response)
+                #Run the recv message processor
+                blocking_recv_state_machine(s,tts_model)
                 
                 #Parse server output. LLM is told to delimit by !@#$ because it needs to be something the AI would not generate in conversation
                 response = response.split('!@#$')
@@ -126,7 +202,9 @@ def run_client_thread():
             mic.disconnect()
 
 
-tts_model = TTS()
+
 
 if __name__ == "__main__":
     run_client_thread()
+
+

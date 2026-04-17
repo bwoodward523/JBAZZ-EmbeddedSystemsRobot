@@ -11,8 +11,14 @@ import time
 os.environ.setdefault("DISPLAY", ":0")
 
 from transitions import Machine
-from events import *
+from events import * 
+from threads.tcp_server import run_client_thread
+from threads.tcp_server_sim import sim_run_client_thread
+from threads.mic import Microphone
+from threads.tts import TTS
+from threads.display import show_emotions_thread
 from thread_controls import listen_event, camera_servo_stop_event, fire_event
+
 
 
 EVENT_TO_TRIGGER = {
