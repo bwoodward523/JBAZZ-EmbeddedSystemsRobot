@@ -83,8 +83,8 @@ jbazz = JBAZZ()
 if __name__ == "__main__":
     # --- Feature flags: set to False to skip that subsystem ---
     ENABLE_SERVO_TEST       = False  # run servo/motor test sequence then continue
-    ENABLE_TCP              = False  # TCP server / audio pipeline
-    ENABLE_DISPLAY          = False  # LED emotion display
+    ENABLE_TCP              = True  # TCP server / audio pipeline
+    ENABLE_DISPLAY          = True  # LED emotion display
     ENABLE_CAMERA_TRACKING  = True   # camera + servo tracking state machine
     sim_tcp                 = True   # True = use simulated TCP (no real server needed)
 
@@ -154,7 +154,7 @@ if __name__ == "__main__":
                 threading.Thread(target=sim_run_client_thread, daemon=True).start()
 
         if ENABLE_DISPLAY:
-            from led_display.show_emotions import show_emotions_thread
+            from threads.display import show_emotions_thread
             threading.Thread(target=show_emotions_thread, daemon=True).start()
 
         # Kick off scanning immediately on startup
