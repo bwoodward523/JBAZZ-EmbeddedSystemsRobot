@@ -1,4 +1,4 @@
-from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, ElevenlabsEngine
+from RealtimeTTS import TextToAudioStream, SystemEngine#, AzureEngine, ElevenlabsEngine
 from data_queues import text_queue, TTS_END_OF_RESPONSE, tts_response_playback_done
 # print("hello")
 class TTS:
@@ -28,7 +28,7 @@ def tts_thread(tts: TTS):
                     break
                 if isinstance(item, str):
                     yield item + " "
-
+        print(f"Feeding tokens")
         tts.stream.feed(response_tokens())
         tts.stream.play_async(fast_sentence_fragment=False)
         if tts.stream.play_thread is not None:

@@ -5,3 +5,5 @@
 import threading
 
 listen_event = threading.Event()
+camera_servo_stop_event = threading.Event()
+fire_event = threading.Event()          # set by state machine to trigger a dart fire

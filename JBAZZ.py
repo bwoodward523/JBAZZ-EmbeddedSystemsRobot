@@ -2,8 +2,14 @@
 #JBazz will need his state machine to be implemented as well
 #This is our state machine file or main thread
 
+import os
+import signal
 import threading
 import time
+
+# Raspberry Pi Connect (wayvnc) runs Wayland; set DISPLAY so OpenCV windows work
+os.environ.setdefault("DISPLAY", ":0")
+
 from transitions import Machine
 from events import * 
 from threads.tcp_server import run_client_thread
@@ -11,60 +17,155 @@ from threads.tcp_server_sim import sim_run_client_thread
 from threads.mic import Microphone
 from threads.tts import TTS
 from threads.display import show_emotions_thread
-from thread_controls import listen_event
+from thread_controls import listen_event, camera_servo_stop_event, fire_event
+
 
 
 EVENT_TO_TRIGGER = {
-    EventType.WAKE_UP_DETECTED: 'listen',
-    EventType.SEND_TO_SLEEP: 'sleep',
-    EventType.FINISHED_LISTENING: 'sleep'
+    EventType.WAKE_UP_DETECTED:   'scan',
+    EventType.PERSON_DETECTED:    'track',
+    EventType.PERSON_LOST:        'rescan',
+    EventType.FIRE_DART:          'fire_dart',
+    EventType.FINISHED_SHOOTING:  'resume',
 }
 
 class JBAZZ:
-    states = ['sleeping', 'listening', 'processing', 'speaking']
+    states = ['sleeping', 'scanning', 'tracking', 'firing']
 
     def __init__(self):
-        # self.mic = Microphone()
-        # self.tts = TTS()
         self.machine = Machine(model=self, states=JBAZZ.states, initial='sleeping')
 
-        #Here we handle defining which transitions are valid. 
-        self.machine.add_transition('listen', 'sleeping', 'listening')
-        self.machine.add_transition('sleep', 'listening', 'sleeping')
+        self.machine.add_transition('scan',      'sleeping',              'scanning')
+        self.machine.add_transition('track',     'scanning',              'tracking')
+        self.machine.add_transition('rescan',    ['tracking', 'firing'],  'scanning')
+        self.machine.add_transition('sleep',     ['scanning', 'tracking'], 'sleeping',
+                                    before='_stop_camera_thread')
+        self.machine.add_transition('fire_dart', 'tracking',              'firing')
+        self.machine.add_transition('resume',    'firing',                'tracking')
 
-    def on_enter_listening(self):
-        # threading.Thread(target=self.mic.record_mic_thread, daemon=True).start()
-        pass
-    def on_exit_listening(self):
-        print("finsihed listening")
-        # dipslay_queue('thinking face')
+        self._camera_thread: threading.Thread | None = None
+
+    def _stop_camera_thread(self):
+        camera_servo_stop_event.set()
+        if self._camera_thread and self._camera_thread.is_alive():
+            self._camera_thread.join(timeout=2.0)
+        self._camera_thread = None
+
+    def on_enter_scanning(self):
+        # Start the thread only if it isn't already running.
+        # On the sleeping→scanning transition it won't exist yet.
+        # On tracking/firing→scanning (PERSON_LOST) the thread is still alive.
+        if self._camera_thread is None or not self._camera_thread.is_alive():
+            camera_servo_stop_event.clear()
+            self._camera_thread = threading.Thread(
+                target=run_camera_servo_thread,
+                args=(camera_servo_stop_event,),
+                daemon=True,
+            )
+            self._camera_thread.start()
+            print("[JBAZZ] camera+servo thread started")
+
+    def on_enter_tracking(self):
+        # Thread is already running; it switched to TRACKING mode internally.
+        print("[JBAZZ] now tracking person")
+
+    def on_enter_firing(self):
+        # Signal the camera/servo thread to fire a dart.
+        # The thread calls mc.fire() then posts FINISHED_SHOOTING.
+        print("[JBAZZ] firing dart")
+        fire_event.set()
+
+    def on_enter_sleeping(self):
+        print("[JBAZZ] sleeping")
 
 jbazz = JBAZZ()
- 
+
 if __name__ == "__main__":
-    print(jbazz.state)
-    post_event(event_type=EventType.WAKE_UP_DETECTED, source="Test Skip")
-    post_event(event_type=EventType.SEND_TO_SLEEP, source="Test Skip")
+    # --- Feature flags: set to False to skip that subsystem ---
+    ENABLE_SERVO_TEST       = False  # run servo/motor test sequence then continue
+    ENABLE_TCP              = True  # TCP server / audio pipeline
+    ENABLE_DISPLAY          = True  # LED emotion display
+    ENABLE_CAMERA_TRACKING  = True   # camera + servo tracking state machine
+    sim_tcp                 = True   # True = use simulated TCP (no real server needed)
 
-    #Establish the conenction to the server ASAP
-    print("hello")
-    sim_tcp = True
-    if not sim_tcp:
-        threading.Thread(target=run_client_thread, daemon=True).start() 
-    else:
-        threading.Thread(target=sim_run_client_thread, daemon=True).start() 
+    if ENABLE_SERVO_TEST:
+        from MotorControllerInterface.motor_controller import MotorController
+        print("[SERVO TEST] Running servo/motor test sequence...")
+        with MotorController() as mc:
+            mc.wake()
+            mc.test()
+            mc.sleep()
+        print("[SERVO TEST] Done.")
 
-    #TODO: Look for connected display
-    #Start display thread if available.
-    threading.Thread(target=show_emotions_thread, daemon=True).start()
+    # --- Graceful shutdown on Ctrl+C or kill signal ---
+    _shutting_down = threading.Event()
 
+    def _shutdown():
+        print("[JBAZZ] Shutting down...")
+        camera_servo_stop_event.set()
+        if jbazz._camera_thread and jbazz._camera_thread.is_alive():
+            jbazz._camera_thread.join(timeout=5.0)
+        # Safety net: send MCU to safe state in case the thread's finally block failed
+        try:
+            from MotorControllerInterface.motor_controller import MotorController
+            with MotorController() as mc:
+                mc.motors_off()
+                mc.sleep()   # homes servos + PWM off
+        except Exception as e:
+            print(f"[JBAZZ] MCU shutdown error: {e}")
+        print("[JBAZZ] Shutdown complete.")
 
-    while True:
-        if not event_queue.empty():
-            event = event_queue.get()
-            print(f"{event.source} triggered {event.type}")
-            #Determine if the event can be triggered and then trigger it from the event trigger map
-            if event.type in EVENT_TO_TRIGGER and EVENT_TO_TRIGGER[event.type] in jbazz.machine.get_triggers(jbazz.state):
-                getattr(jbazz, EVENT_TO_TRIGGER[event.type])()
-                print(f"Event successfully triggered: {event.type} by {event.source}")
-        
+    def _handle_signal(sig, frame):
+        _shutting_down.set()
+
+    signal.signal(signal.SIGINT,  _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    def _manual_fire_thread():
+        print("[JBAZZ] Press ENTER at any time to fire a dart.")
+        while not _shutting_down.is_set():
+            try:
+                input()
+                if jbazz.state == 'tracking':
+                    print("[JBAZZ] Manual fire triggered!")
+                    post_event(EventType.FIRE_DART, source="manual")
+                elif jbazz.state in ('scanning', 'firing'):
+                    # Fire directly via the camera thread's fire_event so it works
+                    # even if the state machine isn't in tracking yet
+                    print(f"[JBAZZ] Manual fire triggered (state={jbazz.state}, firing directly)")
+                    fire_event.set()
+                else:
+                    print(f"[JBAZZ] Can't fire — state is '{jbazz.state}'")
+            except EOFError:
+                break
+
+    threading.Thread(target=_manual_fire_thread, daemon=True).start()
+
+    if ENABLE_CAMERA_TRACKING:
+        from threads.camera_servo_thread import run_camera_servo_thread
+        print(jbazz.state)
+
+        if ENABLE_TCP:
+            if not sim_tcp:
+                from threads.tcp_server import run_client_thread
+                threading.Thread(target=run_client_thread, daemon=True).start()
+            else:
+                from threads.tcp_server_sim import sim_run_client_thread
+                threading.Thread(target=sim_run_client_thread, daemon=True).start()
+
+        if ENABLE_DISPLAY:
+            from threads.display import show_emotions_thread
+            threading.Thread(target=show_emotions_thread, daemon=True).start()
+
+        # Kick off scanning immediately on startup
+        post_event(event_type=EventType.WAKE_UP_DETECTED, source="startup")
+
+        while not _shutting_down.is_set():
+            if not event_queue.empty():
+                event = event_queue.get()
+                print(f"{event.source} triggered {event.type}")
+                if event.type in EVENT_TO_TRIGGER and EVENT_TO_TRIGGER[event.type] in jbazz.machine.get_triggers(jbazz.state):
+                    getattr(jbazz, EVENT_TO_TRIGGER[event.type])()
+                    print(f"State: {jbazz.state}")
+
+    _shutdown()

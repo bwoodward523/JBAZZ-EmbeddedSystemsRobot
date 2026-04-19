@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+from events import post_event, EventType
 from .tts import TTS, tts_thread
 from data_queues import (
     display_queue,
@@ -148,6 +149,51 @@ def run_client_thread():
                 #Run the recv message processor
                 blocking_recv_state_machine(s,tts_model)
                 
+                #Parse server output. LLM is told to delimit by !@#$ because it needs to be something the AI would not generate in conversation
+                response = response.split('!@#$')
+                #Ensure we have three items in our returned message from the server before we try and operate 
+                print(f"size of list {len(response)} | response list = {response}")
+                if len(response) == 4:
+                    print(response[1])
+                    if response[1]:
+                        emotion = response[1].split(":")
+                        print(f"HERE IS THE EMOTION {emotion[1]}")
+                        display_queue.put(emotion[1])
+                    else:
+                        print("LLM failed to return an emotion")
+                       
+
+                    if response[2] == None:
+                        print("Model failed to return a text response")
+
+                    if response[3]:
+                        print(f"Shoot: {response[3]}")
+                        post_event(EventType.FIRE_DART, source="tcp_server")
+                    else:
+                        print("LLM failed to return shoot signal")
+
+                    if tts_model:
+                        #Try to grab text from model
+                        words = response[2].split(":")
+                        if words:
+                            print(f"Words {words}")
+                            tts_model.stream.feed(words[1])
+                            tts_model.stream.play(log_synthesized_text=True)
+                        
+                        else:
+                            print(f"Error getting text from model")
+                            tts_model.stream.feed("error getting returned text from model")
+                            tts_model.stream.play(log_synthesized_text=True)
+                    else:
+                        print("No TTS")
+                else:
+                    if tts_model:
+                        print("List Was not of expected")
+                        tts_model.stream.feed("list is not of size 4")
+                        tts_model.stream.play()
+                    else: 
+                        print("List is not of size 4")
+                counter += 1
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
 
