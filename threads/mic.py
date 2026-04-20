@@ -60,7 +60,16 @@ class Microphone:
 
         self.valid_audio = False
 
-        self.stream = self.p.open(
+        # Tracks a capture thread that refused to exit on the previous record()
+        # call. While this is set, the stream is considered poisoned and must
+        # be rebuilt before starting another reader.
+        self._zombie_thread = None
+        self._recoveries_used = 0
+
+        self.stream = self._open_stream()
+
+    def _open_stream(self):
+        return self.p.open(
             format=self.sample_format,
             channels=self.channels,
             rate=self.fs,
@@ -70,11 +79,58 @@ class Microphone:
             start=False,
         )
 
+    def _rebuild_stream(self):
+        """Tear down and recreate the PyAudio stream (and PyAudio instance)
+        after a capture-thread wedge. Safe to call even if the stream handle
+        is already in a bad state."""
+        if self._recoveries_used >= MAX_STREAM_RECOVERIES:
+            print(
+                f"Mic: exceeded MAX_STREAM_RECOVERIES ({MAX_STREAM_RECOVERIES}); "
+                "refusing further rebuilds."
+            )
+            return False
+
+        self._recoveries_used += 1
+        print(
+            f"Mic: rebuilding audio stream "
+            f"(recovery {self._recoveries_used}/{MAX_STREAM_RECOVERIES})."
+        )
+
+        try:
+            self.stream.close()
+        except Exception as e:
+            print(f"Mic: stream.close() during rebuild failed: {e}")
+        try:
+            self.p.terminate()
+        except Exception as e:
+            print(f"Mic: PyAudio.terminate() during rebuild failed: {e}")
+
+        try:
+            self.p = pyaudio.PyAudio()
+            self.stream = self._open_stream()
+        except Exception as e:
+            print(f"Mic: failed to reopen PyAudio stream: {e}")
+            return False
+
+        return True
+
     def record(self):
         print("Beginning recording")
 
         #Used with VAD_DETECTION_FREQUENCY to speed up real time operations
         vad_counter = 0
+
+        # If the previous record() left a zombie capture thread alive, the
+        # underlying stream is unusable. Rebuild it before we spawn a new
+        # reader; otherwise two threads would race on stream.read() and
+        # deadlock PortAudio.
+        if self._zombie_thread is not None:
+            if self._zombie_thread.is_alive():
+                print("Mic: prior capture thread still alive; rebuilding stream before record.")
+                if not self._rebuild_stream():
+                    print("Mic: stream rebuild failed; aborting record().")
+                    return b""
+            self._zombie_thread = None
 
         try:
             if self.stream.is_stopped():
@@ -140,18 +196,36 @@ class Microphone:
         finally:
             stop_event.set()
             reader_thread.join(timeout=2.0)
-            if reader_thread.is_alive():
+            stream_poisoned = reader_thread.is_alive()
+            if stream_poisoned:
                 print("Capture thread did not exit within timeout.")
+
             try:
                 if self.stream.is_active():
                     self.stream.stop_stream()
             except Exception as e:
                 print(f"Exception during stream stopping: {e}")
-            while True:
-                try:
-                    frames.append(audio_queue.get_nowait())
-                except queue.Empty:
-                    break
+                stream_poisoned = True
+
+            # Only drain leftover frames if the reader is gone. If it's still
+            # alive it may still be mutating audio_queue, and those frames are
+            # from a broken stream anyway.
+            if not stream_poisoned:
+                while True:
+                    try:
+                        frames.append(audio_queue.get_nowait())
+                    except queue.Empty:
+                        break
+
+            if stream_poisoned:
+                # Keep a handle on the zombie so the next record() can confirm
+                # it finally died (or rebuild regardless).
+                self._zombie_thread = reader_thread
+                rebuilt = self._rebuild_stream()
+                if rebuilt:
+                    # Rebuild succeeded; the old stream object is gone, so the
+                    # zombie can't keep reading from it. Drop the reference.
+                    self._zombie_thread = None
 
         audio_bytes = b"".join(frames)
         self.save_as_wav(audio_bytes)
