@@ -17,28 +17,31 @@ QUEUE_MAXSIZE = 960
 MAX_STREAM_RECOVERIES = 30
 VAD_DETECTION_FREQUENCY = 5 #Every 5 loops, run a voice activity check 
 
-def _capture_loop(stream_holder, mic, audio_queue, stop_event):
+MAX_CONSECUTIVE_READ_ERRORS = 10
+
+
+def _capture_loop(stream, audio_queue, stop_event):
     """Read-only: stream.read() and queue.put. Runs on a dedicated thread."""
-    recoveries = 0
-    try:
-        stream_holder[0].start_stream()
-    except Exception as e:
-        print(f"Error starting the record stream: Error {e}")
+    consecutive_errors = 0
     while not stop_event.is_set():
-        s = stream_holder[0]
         try:
-            frame = s.read(READ_CHUNK, exception_on_overflow=False)
+            frame = stream.read(READ_CHUNK, exception_on_overflow=False)
+            consecutive_errors = 0
         except Exception as e:
+            consecutive_errors += 1
             print(f"Error from recording thread: {e}")
-           
+            if consecutive_errors >= MAX_CONSECUTIVE_READ_ERRORS:
+                print("Capture: too many consecutive read errors, exiting.")
+                return
+            time.sleep(0.01)
+            continue
 
         while not stop_event.is_set():
             try:
                 audio_queue.put(frame, timeout=0.2)
                 break
             except queue.Full:
-                print("Q FULL Q FULL Q FULL Q FULL - this is okay, im just letting you know this code ran :P ")
-                pass
+                print("Q FULL - back-pressure, retrying put")
 
 
 class Microphone:
@@ -57,15 +60,6 @@ class Microphone:
 
         self.valid_audio = False
 
-    # def _open_input_stream(self):
-    #     return self.p.open(
-    #         format=self.sample_format,
-    #         channels=self.channels,
-    #         rate=self.fs,
-    #         frames_per_buffer=READ_CHUNK,
-    #         input_device_index=1,
-    #         input=True,
-    #     )
         self.stream = self.p.open(
             format=self.sample_format,
             channels=self.channels,
@@ -73,6 +67,7 @@ class Microphone:
             frames_per_buffer=READ_CHUNK,
             input_device_index=1,
             input=True,
+            start=False,
         )
 
     def record(self):
@@ -81,13 +76,19 @@ class Microphone:
         #Used with VAD_DETECTION_FREQUENCY to speed up real time operations
         vad_counter = 0
 
-        stream_holder = [self.stream]
+        try:
+            if self.stream.is_stopped():
+                print("Starting the mic stream)")
+                self.stream.start_stream()
+        except Exception as e:
+            print(f"Error starting the record stream: {e}")
+
         audio_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
         stop_event = threading.Event()
 
         reader_thread = threading.Thread(
             target=_capture_loop,
-            args=(stream_holder, self, audio_queue, stop_event),
+            args=(self.stream, audio_queue, stop_event),
             daemon=True,
         )
         reader_thread.start()
@@ -138,13 +139,14 @@ class Microphone:
             print(f"Recording error: {e}")
         finally:
             stop_event.set()
+            reader_thread.join(timeout=2.0)
+            if reader_thread.is_alive():
+                print("Capture thread did not exit within timeout.")
             try:
-                stream_holder[0].stop_stream()
-                # stream_holder[0].close()
+                if self.stream.is_active():
+                    self.stream.stop_stream()
             except Exception as e:
-                print(f"Exception during stream stopping: Error {e}")
-                pass
-            reader_thread.join(timeout=0.0)
+                print(f"Exception during stream stopping: {e}")
             while True:
                 try:
                     frames.append(audio_queue.get_nowait())
@@ -164,6 +166,11 @@ class Microphone:
         wf.close()
 
     def disconnect(self):
+        try:
+            if self.stream.is_active():
+                self.stream.stop_stream()
+        except Exception as e:
+            print(f"Exception during stream stopping on disconnect: {e}")
         self.stream.close()
         self.p.terminate()
 
@@ -186,30 +193,3 @@ if __name__ == "__main__":
     mic = Microphone()
     data = mic.record()
     mic.disconnect()
-
-
-
-
- #I actually don't think any of this works to recover. But we at least can skip over it isntead of infinitely stalling now
-            #So We will just hope the user doesn't notice anything. LOL 
-            #Update: this was causing seg faults so lets comment it out but leave ti here because thats funny.
-        #     if stop_event.is_set():
-        #         break
-        #     recoveries += 1
-        #     if recoveries > MAX_STREAM_RECOVERIES:
-        #         print(
-        #             f"Capture: exceeded max stream recoveries ({MAX_STREAM_RECOVERIES})"
-        #         )
-        #         break
-        #     try:
-        #         print("Failure occurred with the pyaudio stream. Attempting to reopen.")
-        #         s.stop_stream()
-        #         s.close()
-        #     except Exception:
-        #         pass
-        #     try:
-        #         stream_holder[0] = mic._open_input_stream()
-        #     except Exception as e:
-        #         print(f"Capture: failed to reopen stream: {e}")
-        #         break
-        #     continue
