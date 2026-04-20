@@ -86,8 +86,9 @@ if __name__ == "__main__":
     ENABLE_TCP              = True  # TCP server / audio pipeline
     ENABLE_DISPLAY          = True  # LED emotion display
     ENABLE_CAMERA_TRACKING  = True   # camera + servo tracking state machine
-    sim_tcp                 = True   # True = use simulated TCP (no real server needed)
-
+    sim_tcp                 = False   # True = use simulated TCP (no real server needed)
+    ENABLE_MOTORS           = False
+    print("1")
     if ENABLE_SERVO_TEST:
         from MotorControllerInterface.motor_controller import MotorController
         print("[SERVO TEST] Running servo/motor test sequence...")
@@ -99,48 +100,52 @@ if __name__ == "__main__":
 
     # --- Graceful shutdown on Ctrl+C or kill signal ---
     _shutting_down = threading.Event()
-
+    print(2)
+    
     def _shutdown():
-        print("[JBAZZ] Shutting down...")
-        camera_servo_stop_event.set()
-        if jbazz._camera_thread and jbazz._camera_thread.is_alive():
-            jbazz._camera_thread.join(timeout=5.0)
-        # Safety net: send MCU to safe state in case the thread's finally block failed
-        try:
-            from MotorControllerInterface.motor_controller import MotorController
-            with MotorController() as mc:
-                mc.motors_off()
-                mc.sleep()   # homes servos + PWM off
-        except Exception as e:
-            print(f"[JBAZZ] MCU shutdown error: {e}")
-        print("[JBAZZ] Shutdown complete.")
+        if ENABLE_MOTORS:
+            print("[JBAZZ] Shutting down...")
+            camera_servo_stop_event.set()
+            if jbazz._camera_thread and jbazz._camera_thread.is_alive():
+                jbazz._camera_thread.join(timeout=5.0)
+            # Safety net: send MCU to safe state in case the thread's finally block failed
+            try:
+                from MotorControllerInterface.motor_controller import MotorController
+                with MotorController() as mc:
+                    mc.motors_off()
+                    mc.sleep()   # homes servos + PWM off
+            except Exception as e:
+                print(f"[JBAZZ] MCU shutdown error: {e}")
+            print("[JBAZZ] Shutdown complete.")
 
     def _handle_signal(sig, frame):
         _shutting_down.set()
 
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
-
+    print(3)
     def _manual_fire_thread():
-        print("[JBAZZ] Press ENTER at any time to fire a dart.")
-        while not _shutting_down.is_set():
-            try:
-                input()
-                if jbazz.state == 'tracking':
-                    print("[JBAZZ] Manual fire triggered!")
-                    post_event(EventType.FIRE_DART, source="manual")
-                elif jbazz.state in ('scanning', 'firing'):
-                    # Fire directly via the camera thread's fire_event so it works
-                    # even if the state machine isn't in tracking yet
-                    print(f"[JBAZZ] Manual fire triggered (state={jbazz.state}, firing directly)")
-                    fire_event.set()
-                else:
-                    print(f"[JBAZZ] Can't fire — state is '{jbazz.state}'")
-            except EOFError:
-                break
+        if ENABLE_MOTORS:
 
-    threading.Thread(target=_manual_fire_thread, daemon=True).start()
-
+            print("[JBAZZ] Press ENTER at any time to fire a dart.")
+            while not _shutting_down.is_set():
+                try:
+                    input()
+                    if jbazz.state == 'tracking':
+                        print("[JBAZZ] Manual fire triggered!")
+                        post_event(EventType.FIRE_DART, source="manual")
+                    elif jbazz.state in ('scanning', 'firing'):
+                        # Fire directly via the camera thread's fire_event so it works
+                        # even if the state machine isn't in tracking yet
+                        print(f"[JBAZZ] Manual fire triggered (state={jbazz.state}, firing directly)")
+                        fire_event.set()
+                    else:
+                        print(f"[JBAZZ] Can't fire — state is '{jbazz.state}'")
+                except EOFError:
+                    break
+    if ENABLE_MOTORS:
+        threading.Thread(target=_manual_fire_thread, daemon=True).start()
+    print(4)
     if ENABLE_CAMERA_TRACKING:
         from threads.camera_servo_thread import run_camera_servo_thread
         print(jbazz.state)

@@ -1,23 +1,65 @@
+"""
+Pi-side TCP client (Step 5).
+
+Receives typed messages from the desktop server and routes them into the Step 4
+audio playback pipeline and existing display/shoot plumbing:
+
+  * EMOTION         -> display_queue
+  * AUDIO_CHUNK     -> audio_playback_queue (raw PCM bytes)
+  * TIMING_DATA     -> timing_queue ((start_s, end_s, word) tuples, consumed in Step 6)
+  * END_OF_RESPONSE -> AUDIO_STREAM_END sentinel into audio_playback_queue
+  * SHOOT           -> wait for audio_stream_end_event, optionally post FIRE_DART
+
+Framing: length-prefixed 4-byte big-endian u32, payload's first byte is the
+message type, remaining bytes are the typed payload.
+"""
+
+from __future__ import annotations
+
+import json
 import socket
 import struct
-import time
-from events import post_event, EventType
-from .tts import TTS, tts_thread
-from data_queues import (
-    display_queue,
-    display_character_queue,
-    shoot_queue,
-    text_queue,
-    TTS_END_OF_RESPONSE,
-    tts_response_playback_done,
-)
 import threading
+
+from data_queues import (
+    AUDIO_STREAM_END,
+    audio_playback_queue,
+    audio_stream_end_event,
+    display_queue,
+    playback_clock,
+    timing_queue,
+)
+from events import EventType, post_event
+
+from .audio_playback import audio_playback_loop
 
 HOST = "10.127.70.21"
 PORT = 5555
 
+# --- Typed protocol message constants (match desktop TCP server) ---
+MSG_EMOTION = 0x00
+MSG_AUDIO_CHUNK = 0x01
+MSG_TIMING_DATA = 0x02
+MSG_END_OF_RESPONSE = 0x03
+MSG_SHOOT = 0x04
+
+_MSG_TYPE_NAMES = {
+    MSG_EMOTION: "EMOTION",
+    MSG_AUDIO_CHUNK: "AUDIO_CHUNK",
+    MSG_TIMING_DATA: "TIMING_DATA",
+    MSG_END_OF_RESPONSE: "END_OF_RESPONSE",
+    MSG_SHOOT: "SHOOT",
+}
+
+# One-shot warning latch for legacy/mismatched frames.
+_legacy_format_warned = False
+
+
+# ---------------------------------------------------------------------------
+# Framing
+# ---------------------------------------------------------------------------
 def recv_exact(sock, n):
-    buffer = b''
+    buffer = b""
     while len(buffer) < n:
         chunk = sock.recv(n - len(buffer))
         if not chunk:
@@ -26,7 +68,7 @@ def recv_exact(sock, n):
     return buffer
 
 
-def send_message(sock, payload: bytes):
+def send_message(sock, payload: bytes) -> None:
     header = struct.pack("!I", len(payload))
     sock.sendall(header)
     sock.sendall(payload)
@@ -36,175 +78,210 @@ def recv_message(sock):
     header = recv_exact(sock, 4)
     if header is None:
         return None
-
     length = struct.unpack("!I", header)[0]
     return recv_exact(sock, length)
 
 
-from enum import Enum
-#Class used to denote which type of data we are expecting from the TCP server. 
-class RECV_STATES(Enum):
-    NONE = -1
-    EMOTION = 0
-    CHARACTERS = 1
-    SHOOT = 2
+def recv_typed_message(sock):
+    """
+    Read one length-prefixed frame and split it into (msg_type, payload_bytes).
 
-#This function will use the states to parse incoming data from the server. It is intended to block the thread until all messages have been received
-#It will communicate to other threads by uploading data to queues.
-#PARAM - s == the socket
-def blocking_recv_state_machine(s,tts_model):
-    STATE = RECV_STATES.EMOTION
+    Returns:
+      (None, None) on clean disconnect
+      (None, b"")  on malformed/empty frame (caller should skip)
+      (int,  bytes) otherwise
+    """
+    frame = recv_message(sock)
+    if frame is None:
+        return None, None
+    if len(frame) < 1:
+        print("[TCP] empty frame received; skipping")
+        return None, b""
+    return frame[0], frame[1:]
 
+
+# ---------------------------------------------------------------------------
+# Per-type handlers
+# ---------------------------------------------------------------------------
+def _handle_emotion(payload: bytes) -> None:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as e:
+        print(f"[TCP] EMOTION utf-8 decode failed: {e}")
+        return
+    emotion = text.split(":", 1)[1] if ":" in text else text
+    emotion = emotion.strip()
+    if not emotion:
+        print("[TCP] EMOTION payload empty after parse; skipping")
+        return
+    display_queue.put(emotion)
+    print(
+        f"[TCP] EMOTION -> display_queue "
+        f"(value={emotion!r}, depth={display_queue.qsize()})"
+    )
+
+
+def _handle_timing_data(payload: bytes) -> None:
+    try:
+        text = payload.decode("utf-8")
+        timings = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        print(f"[TCP] TIMING_DATA decode failed: {e}")
+        return
+    if not isinstance(timings, list):
+        print(f"[TCP] TIMING_DATA not a list: {type(timings).__name__}")
+        return
+
+    count = 0
+    first_ts = None
+    last_ts = None
+    for entry in timings:
+        try:
+            start_s = float(entry["s"])
+            end_s = float(entry["e"])
+            word = entry["w"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        timing_queue.put((start_s, end_s, word))
+        if first_ts is None:
+            first_ts = start_s
+        last_ts = end_s
+        count += 1
+
+    if count:
+        print(
+            f"[TCP] TIMING_DATA -> timing_queue "
+            f"(count={count}, first={first_ts:.3f}s, last={last_ts:.3f}s, "
+            f"depth={timing_queue.qsize()})"
+        )
+
+
+def _handle_audio_chunk(payload: bytes) -> None:
+    if not payload:
+        return
+    audio_playback_queue.put(payload)
+
+
+def _handle_end_of_response() -> None:
+    # Clear the gate before enqueuing the sentinel so a subsequent SHOOT wait()
+    # cannot race past a previous response's stale set.
+    audio_stream_end_event.clear()
+    audio_playback_queue.put(AUDIO_STREAM_END)
+    print(
+        "[TCP] END_OF_RESPONSE -> AUDIO_STREAM_END enqueued "
+        f"(audio_depth={audio_playback_queue.qsize()}); awaiting playback drain"
+    )
+
+
+def _handle_shoot(payload: bytes) -> bool:
+    """
+    Block until audio playback has fully drained, then optionally post FIRE_DART.
+    Returns True so the recv loop exits for the current response cycle.
+    """
+    audio_stream_end_event.wait()
+    try:
+        text = payload.decode("utf-8").strip().lower()
+    except UnicodeDecodeError:
+        text = ""
+    should_fire = text in ("true", "1", "yes")
+    print(f"[TCP] SHOOT payload={text!r} -> fire={should_fire}")
+    if should_fire:
+        post_event(EventType.FIRE_DART, source="tcp_server")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Dispatch loop
+# ---------------------------------------------------------------------------
+def blocking_recv_state_machine(s) -> None:
+    """
+    Consume typed messages from the server until SHOOT is handled for the
+    current response, or the server disconnects.
+    """
+    global _legacy_format_warned
 
     while True:
-        # Receive payload from TCP server and decode it
-        payload = recv_message(s)
-        if payload is None:
-            print("Server closed connection.")
+        msg_type, payload = recv_typed_message(s)
+
+        # Clean disconnect: recv_message returned None.
+        if msg_type is None and payload is None:
+            print("[TCP] server closed connection")
             break
-        payload = payload.decode("utf-8")
-        print(f"payload: {payload}")
+        # Malformed / empty frame: skip and continue.
+        if msg_type is None:
+            continue
 
-        if STATE == RECV_STATES.EMOTION:
-            #Parse the input for the emotion data
-            print(f"emotion data payload {payload}")
-            try:
-                emotion = payload.split(":")[1]
-                print(f"Incoming emotion identified as: {emotion}")
-                    
-                #Add the data to the display queue for the display thread to process. 
-                display_queue.put(emotion)
+        if msg_type == MSG_EMOTION:
+            _handle_emotion(payload)
+        elif msg_type == MSG_AUDIO_CHUNK:
+            _handle_audio_chunk(payload)
+        elif msg_type == MSG_TIMING_DATA:
+            _handle_timing_data(payload)
+        elif msg_type == MSG_END_OF_RESPONSE:
+            _handle_end_of_response()
+        elif msg_type == MSG_SHOOT:
+            if _handle_shoot(payload):
+                break
+        else:
+            if not _legacy_format_warned:
+                _legacy_format_warned = True
+                preview = payload[:32]
+                print(
+                    f"[TCP] UNKNOWN msg_type=0x{msg_type:02X} "
+                    f"(len={len(payload)}, preview={preview!r}) - "
+                    "possible protocol/version mismatch with server"
+                )
+            continue
 
-            except IndexError as e:
-                print(f"Error: Index out of range. {e}")
+    print("[TCP] recv state machine completed")
 
-            #Basically if there is an error parsing the emotion we will jsut move forward cuz LOL
-            #AI could totally pick the wrong emotion :P
 
-            #Update the state to CHARACTERS
-            STATE = RECV_STATES.CHARACTERS
-        
-        elif STATE == RECV_STATES.CHARACTERS:
-            #validate the incoming string data as type str
-            assert type(payload) == str
+# ---------------------------------------------------------------------------
+# Bootstrap
+# ---------------------------------------------------------------------------
+def _start_audio_playback_thread() -> threading.Thread:
+    """Start the Step 4 audio playback worker bound to the shared queues."""
+    thread = threading.Thread(
+        target=audio_playback_loop,
+        kwargs=dict(
+            audio_queue=audio_playback_queue,
+            clock=playback_clock,
+            stream_end_event=audio_stream_end_event,
+        ),
+        daemon=True,
+        name="audio_playback",
+    )
+    thread.start()
+    return thread
 
-            #If change state payload is received from server, simply change the state.
-            if payload == '''##TerminateCharacterStreamState##''':
-                tts_response_playback_done.clear()
-                text_queue.put(TTS_END_OF_RESPONSE)
-                STATE = RECV_STATES.SHOOT
 
-            else:
-                print(f"Word received: {payload}")
-                # Feed the words to the display for later speech visualization
-                display_character_queue.put(payload)
-                text_queue.put(payload)
-        
-        elif STATE == RECV_STATES.SHOOT:
-            tts_response_playback_done.wait()
-            print(f"shoot payload: {payload}")
-            break
-    print("TCP Recv state machine completed processing.")
-def run_client_thread():    
-    #Temporary microphhone creation in the TCP client. 
-    #TODO: Move mic to JBAZZ once the file is ready to handle the TCP connection
+def run_client_thread() -> None:
     from .mic import Microphone
+
     mic = Microphone()
-
-
-    #Create TTS model
-    tts_model = TTS()
-
-    #initialize TTS thread for speaking
-    tts_thread_live = threading.Thread(target=tts_thread, args=(tts_model,))
-    tts_thread_live.start()
+    _start_audio_playback_thread()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
-        print("Connected.")
-
-        counter = 0
+        print(f"[TCP] connected to {HOST}:{PORT}")
 
         try:
-          
             while True:
-                # while tts_model.stream.is_playing():
-                #     print(f"Saving the world ")
-                #     time.sleep(0.1)
-                #The mic recording will create an output.wav file when its complete.
-                #The mic will continue trying to record if no speech is detected inside of the audio.
-                #This is essentially a listen loop
                 while not mic.valid_audio:
                     mic.record()
-                
                 mic.valid_audio = False
 
-                #Grab the data from the output file
                 with open("output.wav", "rb") as f:
                     audio = f.read()
-
-                #Send the data to the TCP server.
                 send_message(s, audio)
 
-                #Run the recv message processor
-                blocking_recv_state_machine(s,tts_model)
-                
-                #Parse server output. LLM is told to delimit by !@#$ because it needs to be something the AI would not generate in conversation
-                response = response.split('!@#$')
-                #Ensure we have three items in our returned message from the server before we try and operate 
-                print(f"size of list {len(response)} | response list = {response}")
-                if len(response) == 4:
-                    print(response[1])
-                    if response[1]:
-                        emotion = response[1].split(":")
-                        print(f"HERE IS THE EMOTION {emotion[1]}")
-                        display_queue.put(emotion[1])
-                    else:
-                        print("LLM failed to return an emotion")
-                       
-
-                    if response[2] == None:
-                        print("Model failed to return a text response")
-
-                    if response[3]:
-                        print(f"Shoot: {response[3]}")
-                        post_event(EventType.FIRE_DART, source="tcp_server")
-                    else:
-                        print("LLM failed to return shoot signal")
-
-                    if tts_model:
-                        #Try to grab text from model
-                        words = response[2].split(":")
-                        if words:
-                            print(f"Words {words}")
-                            tts_model.stream.feed(words[1])
-                            tts_model.stream.play(log_synthesized_text=True)
-                        
-                        else:
-                            print(f"Error getting text from model")
-                            tts_model.stream.feed("error getting returned text from model")
-                            tts_model.stream.play(log_synthesized_text=True)
-                    else:
-                        print("No TTS")
-                else:
-                    if tts_model:
-                        print("List Was not of expected")
-                        tts_model.stream.feed("list is not of size 4")
-                        tts_model.stream.play()
-                    else: 
-                        print("List is not of size 4")
-                counter += 1
+                blocking_recv_state_machine(s)
         except KeyboardInterrupt:
-            print("\nInterrupted by user.")
-
+            print("\n[TCP] interrupted by user")
         finally:
-            print("Closing connection.")
+            print("[TCP] closing connection")
             mic.disconnect()
-
-
 
 
 if __name__ == "__main__":
     run_client_thread()
-
-
