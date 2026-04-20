@@ -6,7 +6,7 @@ from queue import Empty
 import numpy as np
 import PIL.Image as Image
 import adafruit_blinka_raspberry_pi5_piomatter as piomatter
-from data_queues import display_character_queue, display_queue
+from data_queues import display_queue, timing_queue
 
 width = 32
 height = 32
@@ -121,19 +121,6 @@ LETTER_FALLBACK_PHONEMES = {
     "z": "Z",
 }
 
-VISEME_WEIGHTS = {
-    "MBP": 1.35,
-    "FV": 1.25,
-    "TH": 1.25,
-    "A_OPEN": 1.1,
-    "E_WIDE": 1.0,
-    "O_ROUND": 1.1,
-    "L": 0.95,
-    "R": 1.0,
-    "SIBILANT": 0.95,
-    "NEUTRAL": 0.9,
-}
-
 emotion_cache = {}
 mouth_cache = {}
 invalid_mouth_warnings = set()
@@ -200,56 +187,23 @@ def phoneme_to_visemes(phonemes):
     return visemes or [DEFAULT_VISEME]
 
 
-def estimate_viseme_durations(visemes, word):
+# Builds a list of (trigger_s, sprite) tuples for a single timed word.
+# Uniform per-viseme split across Kokoro's reported [start_s, end_s] duration.
+def build_word_events(start_s, end_s, word):
+    normalized = normalize_word(word)
+    if not normalized:
+        return []
+    visemes = phoneme_to_visemes(word_to_phonemes(normalized))
     if not visemes:
         return []
-    
-    durations = []
-    for i in range(len(visemes)):
-        durations.append(0.1)
-    
-    return durations
-    # # Character-count heuristic (fallback until TTS callbacks provide timing).
-    # base_duration_ms = int(100 + len(word) * 28)
-    # word_duration_ms = max(130, min(460, base_duration_ms))
-
-    # weights = [VISEME_WEIGHTS.get(viseme, 1.0) for viseme in visemes]
-    # total_weight = sum(weights) if sum(weights) > 0 else len(weights)
-
-    # durations = [int(word_duration_ms * (weight / total_weight)) for weight in weights]
-    # durations = [max(50, min(180, duration)) for duration in durations]
-
-    # delta = word_duration_ms - sum(durations)
-    # index = 0
-    # while delta != 0 and durations:
-    #     step = 1 if delta > 0 else -1
-    #     candidate = durations[index] + step
-    #     if 45 <= candidate <= 220:
-    #         durations[index] = candidate
-    #         delta -= step
-    #     index = (index + 1) % len(durations)
-    # return durations
-
-
-# Returns the list of sprite events to render in order.
-def process_incoming_word(word):
-    normalized_word = normalize_word(word)
-    if not normalized_word:
+    duration = max(0.0, end_s - start_s)
+    if duration <= 0.0:
         return []
-    phonemes = word_to_phonemes(normalized_word)
-    visemes = phoneme_to_visemes(phonemes)
-    durations = estimate_viseme_durations(visemes, normalized_word)
+    per_viseme = duration / len(visemes)
     events = []
-    for viseme, duration_ms in zip(visemes, durations):
-        sprite_file = VISEME_TO_SPRITE.get(viseme, VISEME_TO_SPRITE[DEFAULT_VISEME])
-        events.append(
-            {
-                "viseme": viseme,
-                "sprite": sprite_file,
-                "duration_ms": duration_ms,
-                "word": normalized_word,
-            }
-        )
+    for i, viseme in enumerate(visemes):
+        sprite = VISEME_TO_SPRITE.get(viseme, VISEME_TO_SPRITE[DEFAULT_VISEME])
+        events.append((start_s + i * per_viseme, sprite))
     return events
 
 #Protects against unexpected characters that the LLM might have generated causing the emotion to not match the file
@@ -335,13 +289,61 @@ def show_emotion_with_mouth(emotion, mouth_sprite):
 
 
 def show_emotions_thread():
-    pass
     active_emotion = DEFAULT_EMOTION
-    viseme_events = []
-    active_event_end = 0.0
+    # Kokoro timeline: elapsed = time.monotonic() - utterance_t0 ≈ protocol seconds from TTS start.
+    utterance_t0 = None
+    prev_word_start_s = None
+    # (start_s, end_s, word, events) where events is [(trigger_s, sprite), ...]
+    current = None
+    last_sprite_rendered = None
     is_talking = False
 
     show_full_emotion(active_emotion)
+
+    def try_start_word(start_s, end_s, word):
+        nonlocal utterance_t0, prev_word_start_s, current, is_talking
+        events = build_word_events(start_s, end_s, word)
+        if not events:
+            return False
+        if utterance_t0 is None:
+            utterance_t0 = time.monotonic() - start_s
+        elif prev_word_start_s is not None and start_s < prev_word_start_s - 1e-3:
+            utterance_t0 = time.monotonic() - start_s
+        prev_word_start_s = start_s
+        current = (start_s, end_s, word, events)
+        is_talking = True
+        if DEBUG_VISEMES:
+            print(
+                f"[display] timing word={word!r} "
+                f"start={start_s:.3f}s end={end_s:.3f}s "
+                f"visemes={len(events)}"
+            )
+        return True
+
+    def finish_utterance_idle():
+        nonlocal utterance_t0, prev_word_start_s, current, last_sprite_rendered, is_talking
+        current = None
+        last_sprite_rendered = None
+        is_talking = False
+        utterance_t0 = None
+        prev_word_start_s = None
+        show_full_emotion(active_emotion)
+
+    def pull_next_word_after_gap():
+        """After a word ends: show full face, then take the next timing triple or go idle."""
+        nonlocal last_sprite_rendered, is_talking
+        last_sprite_rendered = None
+        is_talking = False
+        show_full_emotion(active_emotion)
+        while True:
+            try:
+                start_s, end_s, word = timing_queue.get_nowait()
+            except Empty:
+                finish_utterance_idle()
+                return
+            if try_start_word(start_s, end_s, word):
+                return
+
     while True:
         try:
             while True:
@@ -352,30 +354,30 @@ def show_emotions_thread():
         except Empty:
             pass
 
-        try:
-            while True:
-                word = display_character_queue.get_nowait()
-                if DEBUG_VISEMES:
-                    print(f"Got word: {word} from dcq")
-                events = process_incoming_word(word)
-                if events:
-                    viseme_events.extend(events)
-                    if DEBUG_VISEMES:
-                        print(f"Queued {len(events)} visemes for word '{word}'")
-        except Empty:
-            pass
+        if current is None:
+            try:
+                start_s, end_s, word = timing_queue.get_nowait()
+            except Empty:
+                time.sleep(0.01)
+                continue
+            if not try_start_word(start_s, end_s, word):
+                continue
 
-        now = time.monotonic()
-        if viseme_events:
-            if now >= active_event_end:
-                next_event = viseme_events.pop(0)
-                frame_shown = show_emotion_with_mouth(active_emotion, next_event["sprite"])
-                if frame_shown:
-                    active_event_end = now + (next_event["duration_ms"] / 1000.0)
-                    is_talking = True
-        elif is_talking:
-            # Idle state uses full emotion PNG for stronger personality effect.
-            show_full_emotion(active_emotion)
-            is_talking = False
+        start_s, end_s, word, events = current
+        elapsed = time.monotonic() - utterance_t0
+
+        current_sprite = None
+        while events and events[0][0] <= elapsed:
+            _, current_sprite = events.pop(0)
+
+        if current_sprite is not None and current_sprite != last_sprite_rendered:
+            if DEBUG_VISEMES:
+                print("Showing viseme")
+            frame_shown = show_emotion_with_mouth(active_emotion, current_sprite)
+            if frame_shown:
+                last_sprite_rendered = current_sprite
+
+        if elapsed >= end_s:
+            pull_next_word_after_gap()
 
         time.sleep(0.01)
