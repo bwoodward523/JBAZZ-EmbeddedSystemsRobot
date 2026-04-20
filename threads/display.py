@@ -286,6 +286,7 @@ def show_emotion_with_mouth(emotion, mouth_sprite):
     return True
 
 
+INTERWORD_NEUTRAL_S = 0.25
 
 
 def show_emotions_thread():
@@ -297,11 +298,25 @@ def show_emotions_thread():
     current = None
     last_sprite_rendered = None
     is_talking = False
+    interword_neutral = False
 
     show_full_emotion(active_emotion)
 
+    def drain_emotions():
+        nonlocal active_emotion
+        try:
+            while True:
+                incoming_emotion = display_queue.get_nowait()
+                active_emotion = sanitize_emotion(incoming_emotion)
+                if interword_neutral:
+                    show_emotion_with_mouth(active_emotion, VISEME_TO_SPRITE[DEFAULT_VISEME])
+                elif not is_talking:
+                    show_full_emotion(active_emotion)
+        except Empty:
+            pass
+
     def try_start_word(start_s, end_s, word):
-        nonlocal utterance_t0, prev_word_start_s, current, is_talking
+        nonlocal utterance_t0, prev_word_start_s, current, is_talking, interword_neutral
         events = build_word_events(start_s, end_s, word)
         if not events:
             return False
@@ -312,6 +327,7 @@ def show_emotions_thread():
         prev_word_start_s = start_s
         current = (start_s, end_s, word, events)
         is_talking = True
+        interword_neutral = False
         if DEBUG_VISEMES:
             print(
                 f"[display] timing word={word!r} "
@@ -321,21 +337,38 @@ def show_emotions_thread():
         return True
 
     def finish_utterance_idle():
-        nonlocal utterance_t0, prev_word_start_s, current, last_sprite_rendered, is_talking
+        nonlocal utterance_t0, prev_word_start_s, current, last_sprite_rendered, is_talking, interword_neutral
         current = None
         last_sprite_rendered = None
         is_talking = False
+        interword_neutral = False
         utterance_t0 = None
         prev_word_start_s = None
         show_full_emotion(active_emotion)
 
     def pull_next_word_after_gap():
-        """After a word ends: show full face, then take the next timing triple or go idle."""
-        nonlocal last_sprite_rendered, is_talking
-        last_sprite_rendered = None
+        """After a word ends: neutral mouth ~0.25s while polling; new timing can interrupt."""
+        nonlocal last_sprite_rendered, is_talking, interword_neutral
+        neutral_sprite = VISEME_TO_SPRITE[DEFAULT_VISEME]
+        interword_neutral = True
         is_talking = False
-        show_full_emotion(active_emotion)
+        last_sprite_rendered = neutral_sprite
+        show_emotion_with_mouth(active_emotion, neutral_sprite)
+
+        deadline = time.monotonic() + INTERWORD_NEUTRAL_S
+        while time.monotonic() < deadline:
+            drain_emotions()
+            try:
+                start_s, end_s, word = timing_queue.get_nowait()
+            except Empty:
+                time.sleep(0.01)
+                continue
+            if try_start_word(start_s, end_s, word):
+                return
+
+        interword_neutral = False
         while True:
+            drain_emotions()
             try:
                 start_s, end_s, word = timing_queue.get_nowait()
             except Empty:
@@ -345,14 +378,7 @@ def show_emotions_thread():
                 return
 
     while True:
-        try:
-            while True:
-                incoming_emotion = display_queue.get_nowait()
-                active_emotion = sanitize_emotion(incoming_emotion)
-                if not is_talking:
-                    show_full_emotion(active_emotion)
-        except Empty:
-            pass
+        drain_emotions()
 
         if current is None:
             try:
