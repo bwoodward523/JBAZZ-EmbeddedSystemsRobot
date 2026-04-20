@@ -88,7 +88,7 @@ if __name__ == "__main__":
     ENABLE_CAMERA_TRACKING  = True   # camera + servo tracking state machine
     sim_tcp                 = False   # True = use simulated TCP (no real server needed)
     ENABLE_MOTORS           = False
-    print("1")
+
     if ENABLE_SERVO_TEST:
         from MotorControllerInterface.motor_controller import MotorController
         print("[SERVO TEST] Running servo/motor test sequence...")
@@ -100,7 +100,6 @@ if __name__ == "__main__":
 
     # --- Graceful shutdown on Ctrl+C or kill signal ---
     _shutting_down = threading.Event()
-    print(2)
     
     def _shutdown():
         if ENABLE_MOTORS:
@@ -123,7 +122,6 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
-    print(3)
     def _manual_fire_thread():
         if ENABLE_MOTORS:
 
@@ -145,7 +143,6 @@ if __name__ == "__main__":
                     break
     if ENABLE_MOTORS:
         threading.Thread(target=_manual_fire_thread, daemon=True).start()
-    print(4)
     if ENABLE_CAMERA_TRACKING:
         from threads.camera_servo_thread import run_camera_servo_thread
         print(jbazz.state)

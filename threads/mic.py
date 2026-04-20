@@ -183,12 +183,12 @@ class Microphone:
                     if speech_prob > 0.85:
                         self.valid_audio = True
                         last_voice_time = time.time()
-                        print("speech detected")
+                        # print("speech detected")
                     if time.time() - last_voice_time > 2:
                         print("Silenced Threshold Reached. Sending Audio. - signature 2")
                         break
                     else:
-                        print(f"no detected {time.time() - last_voice_time}")
+                        # print(f"no detected {time.time() - last_voice_time}")
                 else:
                     vad_counter += 1
         except Exception as e:
