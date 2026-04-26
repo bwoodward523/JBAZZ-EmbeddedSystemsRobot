@@ -36,6 +36,7 @@ pure_eval==0.2.3
 PyAudio==0.2.14
 pydantic==2.12.5
 pydantic_core==2.41.5
+pygame>=2.5.0
 Pygments==2.19.2
 pyttsx3==2.99
 RealTimeTTS==0.1.3

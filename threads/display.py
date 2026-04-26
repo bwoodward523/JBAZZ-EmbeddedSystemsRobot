@@ -5,7 +5,6 @@ from queue import Empty
 
 import numpy as np
 import PIL.Image as Image
-import adafruit_blinka_raspberry_pi5_piomatter as piomatter
 from data_queues import display_queue, timing_queue
 
 width = 32
@@ -125,22 +124,37 @@ emotion_cache = {}
 mouth_cache = {}
 invalid_mouth_warnings = set()
 
-geometry = piomatter.Geometry(
-    width=width,
-    height=height,
-    n_addr_lines=4,
-    rotation=piomatter.Orientation.Normal
-)
+USE_PHYSICAL_DISPLAY = False
 
 canvas = Image.new("RGB", (width, height))
 framebuffer = np.asarray(canvas, dtype=np.uint8) + 0
 
-matrix = piomatter.PioMatter(
-    colorspace=piomatter.Colorspace.RGB888Packed,
-    pinout=piomatter.Pinout.Active3,
-    framebuffer=framebuffer,
-    geometry=geometry
-)
+if USE_PHYSICAL_DISPLAY:
+    import adafruit_blinka_raspberry_pi5_piomatter as piomatter
+
+    geometry = piomatter.Geometry(
+        width=width,
+        height=height,
+        n_addr_lines=4,
+        rotation=piomatter.Orientation.Normal,
+    )
+    matrix = piomatter.PioMatter(
+        colorspace=piomatter.Colorspace.RGB888Packed,
+        pinout=piomatter.Pinout.Active3,
+        framebuffer=framebuffer,
+        geometry=geometry,
+    )
+else:
+    matrix = None
+
+
+def _flush_display():
+    if USE_PHYSICAL_DISPLAY:
+        matrix.show()
+    else:
+        from threads import simdisplay
+
+        simdisplay.show(framebuffer)
 
 
 def normalize_word(word):
@@ -269,7 +283,7 @@ def load_mouth_image(sprite_name):
 def show_full_emotion(emotion):
     emotion_img = load_emotion_image(emotion)
     framebuffer[:] = emotion_img
-    matrix.show()
+    _flush_display()
 
 
 def show_emotion_with_mouth(emotion, mouth_sprite):
@@ -282,7 +296,8 @@ def show_emotion_with_mouth(emotion, mouth_sprite):
     frame[0:16, :, :] = emotion_img[0:16, :, :]
     frame[16:32, :, :] = mouth[0:16, :, :]
     framebuffer[:] = frame
-    matrix.show()
+    _flush_display()
+
     return True
 
 
@@ -290,6 +305,11 @@ INTERWORD_NEUTRAL_S = 0.25
 
 
 def show_emotions_thread():
+    if not USE_PHYSICAL_DISPLAY:
+        from threads import simdisplay
+
+        simdisplay.init()
+
     active_emotion = DEFAULT_EMOTION
     # Kokoro timeline: elapsed = time.monotonic() - utterance_t0 ≈ protocol seconds from TTS start.
     utterance_t0 = None
