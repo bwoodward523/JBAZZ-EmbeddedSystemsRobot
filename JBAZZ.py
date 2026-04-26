@@ -123,6 +123,50 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGINT,  _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
+    def _run_fire_sequence():
+        from MotorControllerInterface.motor_controller import (
+            MotorController, SERVO_PUSHER, motor_controller_available, DEFAULT_PORT
+        )
+        try:
+            if not motor_controller_available(DEFAULT_PORT):
+                print("[FIRE] STM32 not found, skipping.")
+                return
+
+            print("[FIRE] Starting fire sequence...")
+            with MotorController() as mc:
+                print("[FIRE] Waking...")
+                if not mc.wake():
+                    print("[FIRE] Wake failed, aborting.")
+                    return
+                time.sleep(0.3)
+
+                print("[FIRE] Motors on...")
+                mc.motors_on()
+
+                print("[FIRE] Waiting 2s for spin-up...")
+                time.sleep(2)
+
+                print("[FIRE] Pusher to start (3,0)...")
+                mc.set_angle(SERVO_PUSHER, 0)
+
+                print("[FIRE] Waiting 2s for servo travel...")
+                time.sleep(2)
+
+                print("[FIRE] Pusher forward (3,180)...")
+                mc.set_angle(SERVO_PUSHER, 180)
+
+                print("[FIRE] Waiting 0.5s...")
+                time.sleep(0.5)
+
+                print("[FIRE] Motors off...")
+                mc.motors_off()
+
+            print("[FIRE] Done.")
+        except Exception as e:
+            print(f"[FIRE] Error during fire sequence: {e}")
+        finally: #I did this try finally because more thread safe but it looks dumb
+            post_event(EventType.FINISHED_SHOOTING, source="fire_sequence")  # always resumes tracking, thread exits
+
     def _manual_fire_thread():
         if ENABLE_MOTORS:
 
@@ -170,5 +214,7 @@ if __name__ == "__main__":
             if event.type in EVENT_TO_TRIGGER and EVENT_TO_TRIGGER[event.type] in jbazz.machine.get_triggers(jbazz.state):
                 getattr(jbazz, EVENT_TO_TRIGGER[event.type])()
                 print(f"State: {jbazz.state}")
+                # if event.type == EventType.FIRE_DART and ENABLE_MOTORS:
+                #     threading.Thread(target=_run_fire_sequence, daemon=True).start()
 
     _shutdown()
