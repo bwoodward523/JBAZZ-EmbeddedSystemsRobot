@@ -261,6 +261,7 @@ def run_client_thread() -> None:
     mic = Microphone()
     _start_audio_playback_thread()
 
+    print("attempting connection to host")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
         print(f"[TCP] connected to {HOST}:{PORT}")
@@ -282,6 +283,7 @@ def run_client_thread() -> None:
             print("[TCP] closing connection")
             mic.disconnect()
 
+    print("Finished connection to host")
 
 if __name__ == "__main__":
     run_client_thread()

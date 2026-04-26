@@ -6,7 +6,7 @@ import adafruit_blinka_raspberry_pi5_piomatter as piomatter
 
 width = 32
 height = 32
-gif_file = "assets/b2.gif"
+gif_file = "led_display/assets/b2.gif"
 # gif_file = "assets/Eye.png"
 # gif_file = "assets/rainbow.gif"
 

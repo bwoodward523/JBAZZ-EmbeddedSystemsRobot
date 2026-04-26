@@ -188,6 +188,7 @@ class Microphone:
                         print("Silenced Threshold Reached. Sending Audio. - signature 2")
                         break
                     else:
+                        pass
                         # print(f"no detected {time.time() - last_voice_time}")
                 else:
                     vad_counter += 1

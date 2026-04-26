@@ -55,15 +55,16 @@ class JBAZZ:
         # Start the thread only if it isn't already running.
         # On the sleeping→scanning transition it won't exist yet.
         # On tracking/firing→scanning (PERSON_LOST) the thread is still alive.
-        if self._camera_thread is None or not self._camera_thread.is_alive():
-            camera_servo_stop_event.clear()
-            self._camera_thread = threading.Thread(
-                target=run_camera_servo_thread,
-                args=(camera_servo_stop_event,),
-                daemon=True,
-            )
-            self._camera_thread.start()
-            print("[JBAZZ] camera+servo thread started")
+        # if self._camera_thread is None or not self._camera_thread.is_alive():
+        #     camera_servo_stop_event.clear()
+        #     self._camera_thread = threading.Thread(
+        #         target=run_camera_servo_thread,
+        #         args=(camera_servo_stop_event,),
+        #         daemon=True,
+        #     )
+        #     self._camera_thread.start()
+        #     print("[JBAZZ] camera+servo thread started")
+        pass
 
     def on_enter_tracking(self):
         # Thread is already running; it switched to TRACKING mode internally.
@@ -85,10 +86,10 @@ if __name__ == "__main__":
     ENABLE_SERVO_TEST       = False  # run servo/motor test sequence then continue
     ENABLE_TCP              = True  # TCP server / audio pipeline
     ENABLE_DISPLAY          = True  # LED emotion display
-    ENABLE_CAMERA_TRACKING  = True   # camera + servo tracking state machine
+    ENABLE_CAMERA_TRACKING  = False  # camera + servo tracking state machine
     sim_tcp                 = False   # True = use simulated TCP (no real server needed)
     ENABLE_MOTORS           = False
-
+    print("Hello?")
     if ENABLE_SERVO_TEST:
         from MotorControllerInterface.motor_controller import MotorController
         print("[SERVO TEST] Running servo/motor test sequence...")
@@ -147,27 +148,27 @@ if __name__ == "__main__":
         from threads.camera_servo_thread import run_camera_servo_thread
         print(jbazz.state)
 
-        if ENABLE_TCP:
-            if not sim_tcp:
-                from threads.tcp_server import run_client_thread
-                threading.Thread(target=run_client_thread, daemon=True).start()
-            else:
-                from threads.tcp_server_sim import sim_run_client_thread
-                threading.Thread(target=sim_run_client_thread, daemon=True).start()
+    if ENABLE_TCP:
+        if not sim_tcp:
+            from threads.tcp_server import run_client_thread
+            threading.Thread(target=run_client_thread, daemon=True).start()
+        else:
+            from threads.tcp_server_sim import sim_run_client_thread
+            threading.Thread(target=sim_run_client_thread, daemon=True).start()
 
-        if ENABLE_DISPLAY:
-            from threads.display import show_emotions_thread
-            threading.Thread(target=show_emotions_thread, daemon=True).start()
+    if ENABLE_DISPLAY:
+        from threads.display import show_emotions_thread
+        threading.Thread(target=show_emotions_thread, daemon=True).start()
 
-        # Kick off scanning immediately on startup
-        post_event(event_type=EventType.WAKE_UP_DETECTED, source="startup")
+    # Kick off scanning immediately on startup
+    post_event(event_type=EventType.WAKE_UP_DETECTED, source="startup")
 
-        while not _shutting_down.is_set():
-            if not event_queue.empty():
-                event = event_queue.get()
-                print(f"{event.source} triggered {event.type}")
-                if event.type in EVENT_TO_TRIGGER and EVENT_TO_TRIGGER[event.type] in jbazz.machine.get_triggers(jbazz.state):
-                    getattr(jbazz, EVENT_TO_TRIGGER[event.type])()
-                    print(f"State: {jbazz.state}")
+    while not _shutting_down.is_set():
+        if not event_queue.empty():
+            event = event_queue.get()
+            print(f"{event.source} triggered {event.type}")
+            if event.type in EVENT_TO_TRIGGER and EVENT_TO_TRIGGER[event.type] in jbazz.machine.get_triggers(jbazz.state):
+                getattr(jbazz, EVENT_TO_TRIGGER[event.type])()
+                print(f"State: {jbazz.state}")
 
     _shutdown()
